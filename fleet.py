@@ -98,8 +98,23 @@ async def _held(sym: str, good: str) -> int:
     return sum(i["units"] for i in s["cargo"]["inventory"] if i["symbol"] == good)
 
 
-async def _buy(sym: str, good: str, target: int, *, log=None) -> None:
+async def _buy(sym: str, good: str, target: int, *, max_price: float | None = None, log=None) -> None:
+    """Buy up to ``target`` units of ``good``. Profitability guard: if ``max_price``
+    is set and the live unit price exceeds it, buy NOTHING — a buy above the ceiling
+    is a guaranteed loss (a saturated market or an over-priced contract good)."""
     await C.call("POST", f"/my/ships/{sym}/dock")
+    if max_price is not None:
+        s = await _ship(sym)
+        wp = s["nav"]["waypointSymbol"]
+        try:
+            m = await C.call("GET", f"/systems/{T._system_of(wp)}/waypoints/{wp}/market")
+            price = next((g["purchasePrice"] for g in m.get("tradeGoods", []) if g["symbol"] == good), None)
+        except C.SpaceTradersError:
+            price = None
+        if price is not None and price > max_price:
+            if log:
+                log(f"{sym}: SKIP buy {good} @ {price} > ceiling {max_price:.0f} (would lose money)")
+            return
     while await _held(sym, good) < target:
         s = await _ship(sym)
         room = s["cargo"]["capacity"] - s["cargo"]["units"]
@@ -150,6 +165,10 @@ async def job_contract(sym: str, contract_id: str, *, log=None) -> str:
     if not buys:
         return f"no market sells {good} in {system} (needs mining) — skipped"
     buy_wp = buys[0]
+    # Profitability ceiling: the contract pays (advance + fulfillment) over the
+    # required units. Buying a unit above that is a net loss — _buy refuses to.
+    pay = ct["terms"].get("payment", {})
+    pay_per_unit = (pay.get("onAccepted", 0) + pay.get("onFulfilled", 0)) / max(req, 1)
     cap = (await _ship(sym))["cargo"]["capacity"]
     while True:
         cs = await C.call("GET", "/my/contracts")
@@ -160,9 +179,10 @@ async def job_contract(sym: str, contract_id: str, *, log=None) -> str:
             break
         await travel_to(sym, buy_wp, log=log)
         await _dump_except(sym, good, log=log)
-        await _buy(sym, good, min(req - done, cap), log=log)
+        await _buy(sym, good, min(req - done, cap), max_price=pay_per_unit, log=log)
         if await _held(sym, good) == 0:
-            return f"could not buy {good} (out of credits/supply) at {done}/{req}"
+            return (f"skipped {good} contract at {done}/{req}: buy price exceeds the "
+                    f"{pay_per_unit:.0f}/unit the contract pays (would lose money)")
         await travel_to(sym, deliver_wp, log=log)
         await C.call("POST", f"/my/ships/{sym}/dock")
         u = await _held(sym, good)
@@ -202,15 +222,31 @@ async def job_mining(sym: str, asteroid: str, ore: str, sell_wp: str, *, log=Non
     return f"mined+sold {held}×{ore} for {r['transaction']['totalPrice']:,} cr"
 
 
+async def _good_price(wp: str, good: str) -> tuple:
+    """(purchasePrice, sellPrice) for ``good`` at ``wp`` — needs a ship present; (None, None) if unknown."""
+    try:
+        m = await C.call("GET", f"/systems/{T._system_of(wp)}/waypoints/{wp}/market")
+        g = next((x for x in m.get("tradeGoods", []) if x["symbol"] == good), None)
+        return (g.get("purchasePrice"), g.get("sellPrice")) if g else (None, None)
+    except C.SpaceTradersError:
+        return (None, None)
+
+
 async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *, log=None) -> str:
-    """One buy-low / sell-high round trip for a good."""
+    """One buy-low / sell-high round trip for a good — only if the spread is positive."""
     cap = (await _ship(sym))["cargo"]["capacity"]
     await travel_to(sym, buy_wp, log=log)
+    # Profitability guard: confirm sell (at sell_wp) > buy (here) before committing.
+    buy_price, _ = await _good_price(buy_wp, good)
+    _, sell_price = await _good_price(sell_wp, good)
+    if buy_price and sell_price and sell_price <= buy_price:
+        return (f"skipped {good} trade: buy {buy_price} ≥ sell {sell_price} "
+                f"({buy_wp}→{sell_wp}) — no margin, would lose money")
     await _dump_except(sym, good, log=log)
-    await _buy(sym, good, cap, log=log)
+    await _buy(sym, good, cap, max_price=sell_price, log=log)
     held = await _held(sym, good)
     if held == 0:
-        return f"could not buy {good} at {buy_wp}"
+        return f"could not buy {good} at {buy_wp} (or price ≥ resale — guarded)"
     await travel_to(sym, sell_wp, log=log)
     await C.call("POST", f"/my/ships/{sym}/dock")
     r = await C.call("POST", f"/my/ships/{sym}/sell", json={"symbol": good, "units": held})
@@ -249,7 +285,19 @@ async def _contract_loop(sym: str, deadline: float, claimed: set, lock, *, log=N
             if not cid:
                 try:
                     d = await C.call("POST", f"/my/ships/{sym}/negotiate/contract")
-                    cid = d["contract"]["id"]
+                    new_ct = d["contract"]
+                    # Sourceability guard: do NOT accept a contract whose good no
+                    # market in-system sells — it's un-fulfillable (a MACHINERY-style
+                    # dead-end), and SpaceTraders won't let you cancel an accepted
+                    # contract, so it would block this ship until it expires. Decline
+                    # by not accepting; the ship parks this window and retries later.
+                    ndv = new_ct["terms"]["deliver"][0]
+                    g = ndv["tradeSymbol"]
+                    buys, _ = await T._good_markets(T._system_of(ndv["destinationSymbol"]), g)
+                    if not buys:
+                        return (f"{n} done; declined an un-sourceable {g} contract "
+                                f"(no market sells it in-system) — parking, not hauling dead weight")
+                    cid = new_ct["id"]
                     await C.call("POST", f"/my/contracts/{cid}/accept")
                 except C.SpaceTradersError as e:
                     return f"{n} contract(s) done; no more available ({e})"
