@@ -8,8 +8,8 @@ single step. Needs the SpaceTraders ACCOUNT token (config/secrets.yaml
 ``spacetraders.account_token`` or the SPACETRADERS_ACCOUNT_TOKEN env var) to register,
 and — for the kick — the server running on 127.0.0.1:7870.
 
-    PYTHONPATH=. python plugins/spacetraders/fresh_start.py <CALLSIGN> [FACTION]
-    PYTHONPATH=. python plugins/spacetraders/fresh_start.py            # reuse saved token, just seed + kick
+    PYTHONPATH=. python config/plugins/spacetraders/fresh_start.py <CALLSIGN> [FACTION]
+    PYTHONPATH=. python config/plugins/spacetraders/fresh_start.py     # reuse saved token, just seed + kick
 """
 
 import asyncio
@@ -30,7 +30,9 @@ def _account_token() -> str | None:
 
 
 async def main() -> None:
-    sys.path.insert(0, "plugins")
+    # Make `spacetraders` importable regardless of CWD — the plugin lives next to this
+    # file (…/config/plugins/spacetraders/), so add its parent (…/config/plugins).
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     callsign = sys.argv[1] if len(sys.argv) > 1 else None
     faction = sys.argv[2] if len(sys.argv) > 2 else "COSMIC"
     from spacetraders import client as C
