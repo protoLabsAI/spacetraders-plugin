@@ -86,17 +86,40 @@ LESSONS: list[tuple[str, str]] = [
 ]
 
 
-def seed(db_path: str) -> int:
-    # idempotent: clear prior seed rows, then re-add
+def _build_store(db_path: str):
+    """The SAME store the server uses: HybridKnowledgeStore (FTS5 + embeddings via
+    the gateway) when knowledge.embeddings is on, so seeded lessons get vectors and
+    semantic recall works — not just keyword FTS5. Degrades to base on any failure."""
+    try:
+        from graph.config import LangGraphConfig
+        config = LangGraphConfig.from_yaml("config/langgraph-config.yaml")
+        if getattr(config, "knowledge_embeddings", False):
+            from graph.llm import create_embed_fn
+            from knowledge.hybrid_store import HybridKnowledgeStore
+            embed_fn = create_embed_fn(config)
+            if embed_fn is not None:
+                return HybridKnowledgeStore(db_path=db_path, embed_fn=embed_fn), "hybrid (FTS5 + embeddings)"
+    except Exception as e:  # noqa: BLE001 — never fail the seed; fall back to FTS5
+        print(f"  (hybrid store unavailable: {e}; seeding FTS5-only)")
+    return KnowledgeStore(db_path=db_path), "FTS5-only"
+
+
+def seed(db_path: str) -> tuple[int, str]:
+    # idempotent: clear prior seed rows (and their vectors) before re-adding
     try:
         con = sqlite3.connect(db_path)
+        try:
+            con.execute("DELETE FROM chunk_vectors WHERE chunk_id IN "
+                        "(SELECT id FROM chunks WHERE source = ?)", (SOURCE,))
+        except sqlite3.DatabaseError:
+            pass  # no vector table yet
         con.execute("DELETE FROM chunks WHERE source = ?", (SOURCE,))
         con.commit()
         con.close()
     except sqlite3.DatabaseError:
-        pass  # table may not exist yet; add_chunk will create the schema
+        pass  # tables may not exist yet; add_chunk will create the schema
 
-    store = KnowledgeStore(db_path=db_path)
+    store, kind = _build_store(db_path)
     n = 0
     for heading, content in LESSONS:
         rid = store.add_chunk(
@@ -105,15 +128,21 @@ def seed(db_path: str) -> int:
         )
         if rid is not None:
             n += 1
-    return n
+    return n, kind
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--db", default=os.path.expanduser("~/.protoagent/knowledge/agent.db"))
+    default_db = os.path.expanduser("~/.protoagent/knowledge/agent.db")
+    try:
+        from graph.config import LangGraphConfig
+        default_db = LangGraphConfig.from_yaml("config/langgraph-config.yaml").knowledge_db_path or default_db
+    except Exception:  # noqa: BLE001
+        pass
+    p.add_argument("--db", default=default_db)
     args = p.parse_args()
-    n = seed(args.db)
-    print(f"seeded {n}/{len(LESSONS)} durable SpaceTraders lessons → {args.db}")
+    n, kind = seed(args.db)
+    print(f"seeded {n}/{len(LESSONS)} durable SpaceTraders lessons → {args.db} [{kind}]")
 
 
 if __name__ == "__main__":
