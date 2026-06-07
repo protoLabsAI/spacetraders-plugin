@@ -585,10 +585,22 @@ async def autopilot(minutes: float, *, log=None) -> dict:
 _OPS: dict = {"task": None, "started_minutes": 0.0, "result": None, "log": []}
 
 
+_GOAL_CREDITS = 1_000_000  # engine self-stops at the goal — don't churn the API after winning
+
+
 async def _run_ops(minutes: float) -> None:
+    """Run autopilot windows BACK-TO-BACK so the engine self-perpetuates — it no longer
+    depends on a scheduler tick to relaunch it (the loopback self-POST is flaky under
+    load). Stops at the credits goal or when stop_ops() cancels it."""
     _OPS["log"] = []
     try:
-        _OPS["result"] = await autopilot(minutes, log=lambda m: _OPS["log"].append(m))
+        while True:
+            res = await autopilot(minutes, log=lambda m: _OPS["log"].append(m))
+            _OPS["result"] = res
+            if (res or {}).get("credits_end", 0) >= _GOAL_CREDITS:
+                _OPS["log"].append(f"🎯 goal reached ({res['credits_end']:,} cr) — engine idling")
+                return
+            await asyncio.sleep(3)   # a breath between windows
     except asyncio.CancelledError:
         _OPS["result"] = {"stopped": True}
         raise

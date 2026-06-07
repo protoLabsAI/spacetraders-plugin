@@ -134,18 +134,15 @@ The loop you run:
 1. **Assess** — `st_agent` (credits), `st_autopilot_status` (which ships are idle vs
    busy), `st_contracts` (current work). Know your fleet: cargo ships earn,
    probes scout.
-2. **Run the engine** — `st_autopilot_start(minutes)` launches EVERY ship at once under
-   the one rate budget, in the BACKGROUND (it returns immediately): cargo ships work
-   procurement contracts back-to-back, probes scout. Poll `st_autopilot_status` to watch
-   progress + credits; `st_autopilot_stop` to halt. Don't hand-fly ships leg by leg —
-   let the engine handle travel/fuel (it auto-DRIFTs; probes fly free).
-3. **Review & adapt** — read the per-ship results and the cr/hr. If a ship got
-   stuck (no sourceable contract, out of credits), investigate: `st_contracts` /
-   `st_negotiate_contract`, `st_trade_routes` for a trade alternative, or
-   `st_find_market` to check a good's supply chain. If credits allow and it raises
-   throughput, buy a ship (`st_shipyard` / `st_buy_ship`).
-4. **Repeat** — launch the next autopilot window. Over time, track whether cr/hr is
-   rising.
+2. **Run the engine** — `st_autopilot_start(minutes)` ONCE. It now runs CONTINUOUSLY in
+   the background (looping windows back-to-back until 1,000,000 credits or you call
+   `st_autopilot_stop`): cargo ships work contracts + trade routes, probes fan out to
+   scout. You do NOT need to re-launch it, and you must NOT schedule_task ticks to keep
+   it going — it self-perpetuates. Poll `st_autopilot_status` to watch; let it handle
+   travel/fuel (it refuels en route; probes fly free).
+3. **Review & adapt (lightly)** — read the cr/hr + per-ship results. The engine already
+   self-heals (skips dead-end contracts, drops unprofitable trades). Only step in for
+   something it can't: a truly broken ship, or a strategy nudge. Don't micromanage.
 
 Principles: contracts are the big earners (a single procurement can pay 6-figures)
 — keep every cargo ship on one. Don't micromanage movement; that's the engine's
