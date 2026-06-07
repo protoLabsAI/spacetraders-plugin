@@ -549,9 +549,12 @@ async def autopilot(minutes: float, *, log=None) -> dict:
     jobs = {}
     cargo_ships = [s for s in ships if s["cargo"]["capacity"] > 0]
     probes = [s for s in ships if s["cargo"]["capacity"] == 0]
-    for p in probes:
+    # Spread probes ACROSS the markets (round-robin) so they cover ground instead of
+    # all clustering on the first few — that's what fills the price map fast.
+    for i, p in enumerate(probes):
         if market_wps:
-            jobs[p["symbol"]] = job_scout(p["symbol"], market_wps[:8], log=log)
+            share = market_wps[i::len(probes)] or market_wps
+            jobs[p["symbol"]] = job_scout(p["symbol"], share, log=log)
     if cargo_ships:
         jobs[cargo_ships[0]["symbol"]] = _contract_loop(
             cargo_ships[0]["symbol"], deadline, claimed, lock, log=log)
