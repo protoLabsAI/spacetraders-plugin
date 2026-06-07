@@ -54,6 +54,8 @@ def _ship_row(s: dict) -> dict:
     nav = s.get("nav", {})
     fuel = s.get("fuel", {})
     cargo = s.get("cargo", {})
+    in_transit = nav.get("status") == "IN_TRANSIT"
+    route = nav.get("route", {})
     return {
         "symbol": s["symbol"],
         "role": "cargo" if cargo.get("capacity", 0) > 0 else "scout",
@@ -62,6 +64,53 @@ def _ship_row(s: dict) -> dict:
         "fuel": ("∞" if fuel.get("capacity", 0) == 0
                  else f"{fuel.get('current', '?')}/{fuel.get('capacity', '?')}"),
         "cargo": f"{cargo.get('units', 0)}/{cargo.get('capacity', 0)}",
+        # Where it's headed (in-transit only) — dest, ISO arrival (JS ticks the ETA), mode.
+        "dest": (route.get("destination") or {}).get("symbol") if in_transit else None,
+        "arrival": route.get("arrival") if in_transit else None,
+        "mode": nav.get("flightMode") if in_transit else None,
+    }
+
+
+_STATUS_CACHE: dict = {"at": -999.0, "data": None}
+_STATUS_TTL = 120.0  # server status (leaderboard + reset + stats) barely moves
+
+
+async def _server_status() -> dict:
+    """The galaxy status root (GET /) — leaderboards, serverResets, stats. Cached."""
+    now = asyncio.get_event_loop().time()
+    if _STATUS_CACHE["data"] is None or now - _STATUS_CACHE["at"] >= _STATUS_TTL:
+        try:
+            _STATUS_CACHE["data"] = await C.call("GET", "/")
+        except C.SpaceTradersError:
+            _STATUS_CACHE["data"] = _STATUS_CACHE["data"] or {}
+        _STATUS_CACHE["at"] = now
+    return _STATUS_CACHE["data"] or {}
+
+
+def _standing(status: dict, agent_symbol: str, my_credits: int) -> dict:
+    """Top-credits leaderboard + where we stack up."""
+    mc = status.get("leaderboards", {}).get("mostCredits", []) or []
+    rank = next((i + 1 for i, x in enumerate(mc) if x.get("agentSymbol") == agent_symbol), None)
+    return {
+        "top": [{"agent": x.get("agentSymbol"), "credits": x.get("credits")} for x in mc[:5]],
+        "rank": rank,
+        "board_size": len(mc),
+        "cutoff": mc[-1].get("credits") if mc else None,   # credits to make the board (#last)
+        "you": my_credits,
+    }
+
+
+def _server_info(status: dict) -> dict:
+    """Reset cycle + galaxy scale — so the operator knows the clock + the field size."""
+    sr = status.get("serverResets", {})
+    stats = status.get("stats", {})
+    return {
+        "next_reset": sr.get("next"),        # ISO — JS ticks the countdown
+        "frequency": sr.get("frequency"),    # e.g. "weekly"
+        "last_reset": status.get("resetDate"),
+        "agents": stats.get("agents"),
+        "ships": stats.get("ships"),
+        "systems": stats.get("systems"),
     }
 
 
@@ -95,11 +144,14 @@ async def _snapshot() -> dict:
     from . import fleet
     ops = fleet.ops_status()
     last = ops.get("result") or {}
+    status = await _server_status()
     data = {
         "agent": {"symbol": agent["symbol"], "credits": agent["credits"],
                   "hq": agent["headquarters"], "faction": agent.get("startingFaction"),
                   "ships": agent.get("shipCount")},
         "ships": [_ship_row(s) for s in ships],
+        "standing": _standing(status, agent["symbol"], agent["credits"]),
+        "server": _server_info(status),
         "contracts": [_contract_row(c) for c in contracts if not c.get("fulfilled")][:4],
         "autopilot": {
             "running": ops.get("running", False),
@@ -173,6 +225,12 @@ window.addEventListener("message", e => {
 });
 const cr = n => n == null ? "—" : n.toLocaleString() + " cr";
 const stClass = s => ({IN_TRANSIT:"transit",DOCKED:"docked",IN_ORBIT:"orbit"}[s]||"");
+const compact = n => n==null?"—":n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?Math.round(n/1e3)+"k":""+n;
+function eta(iso){ if(!iso) return ""; const ms=new Date(iso)-new Date(); if(ms<=0) return "arriving";
+  const s=Math.round(ms/1000); return Math.floor(s/60)+"m"+("0"+(s%60)).slice(-2)+"s"; }
+function dur(iso){ if(!iso) return "—"; const ms=new Date(iso)-new Date(); if(ms<=0) return "now";
+  const s=Math.floor(ms/1000),d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
+  return (d?d+"d ":"")+h+"h "+m+"m"; }
 async function poll(){
   try{
     const h = TOKEN ? {Authorization:"Bearer "+TOKEN} : {};
@@ -195,7 +253,14 @@ function render(d){
     a.symbol+" · "+a.faction+" · HQ "+a.hq+" · "+a.ships+" ships";
   const ships = d.ships.map(s=>`<tr><td>${s.symbol}</td><td>${s.role}</td>
     <td><span class="pill ${stClass(s.status)}">${s.status}</span></td>
-    <td>${s.waypoint}</td><td>${s.fuel}</td><td>${s.cargo}</td></tr>`).join("");
+    <td>${s.waypoint}</td>
+    <td>${s.dest?`→ ${s.dest} · <span class="eta" data-arr="${s.arrival}">${eta(s.arrival)}</span> · ${s.mode}`:'<span style="color:var(--mut)">—</span>'}</td>
+    <td>${s.fuel}</td><td>${s.cargo}</td></tr>`).join("");
+  const lb=d.standing||{}, srv=d.server||{};
+  const board=(lb.top||[]).map((x,i)=>`<tr><td style="color:var(--mut)">#${i+1}</td><td>${x.agent}</td>
+    <td style="text-align:right">${compact(x.credits)}</td></tr>`).join("");
+  const youLine=`You — <b>${a.symbol}</b>: ${cr(a.credits)} · `+(lb.rank?`ranked #${lb.rank}`:"unranked")
+    +(lb.cutoff?` · top ${lb.board_size} needs ${compact(lb.cutoff)}`:"");
   const cons = d.contracts.length ? d.contracts.map(c=>`<tr><td>${c.type}</td>
     <td>${c.deliver}</td><td>${c.to}</td><td>${cr(c.pay)}</td>
     <td><span class="pill ${c.state==='accepted'?'run':'idle'}">${c.state}</span></td></tr>`).join("")
@@ -210,8 +275,17 @@ function render(d){
       ${ap.last_per_hour!=null?`<div class="sub">last run: ${cr(ap.last_gained)} (≈ ${cr(ap.last_per_hour)}/hr)</div>`:''}
     </div>
   </div>
+  <div class="grid" style="margin-top:14px">
+    <div class="card"><h2>Standing — most credits</h2>
+      <table>${board||'<tr><td style="color:var(--mut)">leaderboard unavailable</td></tr>'}</table>
+      <div class="sub" style="margin-top:8px">${youLine}</div></div>
+    <div class="card"><h2>Universe</h2>
+      <div class="big" style="font-size:20px">wipe in <span class="wipe" data-next="${srv.next_reset||''}">${dur(srv.next_reset)}</span></div>
+      <div class="sub" style="margin-top:4px">${srv.frequency||'?'} reset${srv.next_reset?` · ${new Date(srv.next_reset).toLocaleString()}`:''}</div>
+      <div class="sub" style="margin-top:6px">galaxy: ${(srv.agents||'?').toLocaleString?srv.agents.toLocaleString():srv.agents} agents · ${compact(srv.ships)} ships · ${compact(srv.systems)} systems</div></div>
+  </div>
   <div class="card" style="margin-top:14px"><h2>Fleet (${d.ships.length})</h2>
-    <table><tr><th>Ship</th><th>Role</th><th>Status</th><th>Location</th><th>Fuel</th><th>Cargo</th></tr>
+    <table><tr><th>Ship</th><th>Role</th><th>Status</th><th>Location</th><th>Headed</th><th>Fuel</th><th>Cargo</th></tr>
     ${ships}</table></div>
   <div class="card" style="margin-top:14px"><h2>Contracts</h2>
     <table><tr><th>Type</th><th>Deliver</th><th>To</th><th>Pays</th><th>State</th></tr>${cons}</table></div>
@@ -220,4 +294,9 @@ function render(d){
   `;
 }
 poll(); setInterval(poll, 8000);
+// Tick the countdowns every second between polls.
+setInterval(()=>{
+  document.querySelectorAll('.eta').forEach(e=>{const v=eta(e.dataset.arr); if(v) e.textContent=v;});
+  document.querySelectorAll('.wipe').forEach(e=>{e.textContent=dur(e.dataset.next);});
+},1000);
 </script></body></html>"""
