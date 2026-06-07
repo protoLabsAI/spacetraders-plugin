@@ -228,6 +228,29 @@ async def st_autopilot_stop() -> str:
 
 
 @tool
+async def st_knobs() -> str:
+    """Read the engine's current strategy knobs (min_margin, buy_buffer, max_ships,
+    probe_buffer, map_target, max_probes) — for auditing how the engine is behaving."""
+    from . import fleet
+    return ", ".join(f"{k}={v}" for k, v in fleet.knobs().items())
+
+
+@tool
+async def st_tune(knob: str, value: float) -> str:
+    """Tune one engine knob at runtime (reversible) — takes effect on the running
+    autopilot immediately. Use after auditing/researching to adapt the engine to the map:
+    e.g. st_tune("min_margin", 15) to surface trade routes in a thin market, or
+    st_tune("map_target", 5) to start trading on fewer scouted markets.
+
+    Args:
+        knob: one of min_margin, buy_buffer, max_ships, probe_buffer, map_target, max_probes
+        value: the new numeric value
+    """
+    from . import fleet
+    return fleet.set_knob(knob, value)
+
+
+@tool
 async def st_ship(ship: str) -> str:
     """Full status for one ship — nav, fuel, cargo, and crew/cooldown.
 
@@ -898,7 +921,7 @@ def _harden(tools: list) -> list:
 def get_spacetraders_tools() -> list:
     return _harden([
         st_register, st_agent, st_fleet, st_autopilot_status,
-        st_autopilot_start, st_autopilot_stop, st_ship,
+        st_autopilot_start, st_autopilot_stop, st_knobs, st_tune, st_ship,
         st_orbit, st_dock, st_navigate, st_travel, st_plan_route, st_refuel,
         st_transfer, st_shipyard, st_buy_ship,
         st_waypoints, st_market, st_find_market, st_trade_routes,

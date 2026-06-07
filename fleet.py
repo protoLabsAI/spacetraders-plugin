@@ -406,6 +406,29 @@ _MAP_TARGET = 8         # markets to have in the price map before arbitrage surf
 _MAX_PROBES = 5         # enough parallel scouts
 _ROUTE_CACHE: dict = {"at": -1e9, "route": None}
 
+# Runtime-tunable engine knobs (the strategist adjusts these from its research/audit —
+# e.g. lower min_margin to surface routes in a thin market). The engine reads the module
+# globals at call time, so set_knob takes effect on the running autopilot immediately.
+_TUNABLE = {"min_margin": "_MIN_MARGIN", "buy_buffer": "_BUY_BUFFER", "max_ships": "_MAX_SHIPS",
+            "probe_buffer": "_PROBE_BUFFER", "map_target": "_MAP_TARGET", "max_probes": "_MAX_PROBES"}
+
+
+def knobs() -> dict:
+    """The current engine knobs (name -> value) for audit/reporting."""
+    g = globals()
+    return {k: g[v] for k, v in _TUNABLE.items()}
+
+
+def set_knob(name: str, value: float) -> str:
+    """Override an engine knob at runtime (bounded 'tune' authority — reversible)."""
+    key = (name or "").lower()
+    if key not in _TUNABLE:
+        return f"unknown knob {name!r}; tunable: {', '.join(_TUNABLE)}"
+    g = globals(); var = _TUNABLE[key]
+    old = g[var]
+    g[var] = type(old)(value)
+    return f"tuned {key}: {old} -> {g[var]}"
+
 
 async def _best_trade_route(system: str, market_wps: list) -> dict | None:
     """The best CURRENTLY-profitable arbitrage route from markets with live prices

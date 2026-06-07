@@ -158,5 +158,63 @@ region), pursue THAT instead of raw cr/hr.""",
 )
 
 
+_STRATEGIST_TOOLS = [
+    # AUDIT (read-only): position, fleet, contracts, routes, engine knobs
+    "st_agent", "st_fleet", "st_ship", "st_autopilot_status", "st_knobs",
+    "st_contracts", "st_trade_routes", "st_find_market", "st_market", "st_waypoints", "st_shipyard",
+    # RESEARCH + KNOWLEDGE — the self-improvement substrate
+    "web_search", "fetch_url", "memory_recall", "memory_list", "memory_ingest", "current_time",
+    # ACT — self-heal + tune ONLY (reversible, no spending): un-stick ships, adapt knobs
+    "st_autopilot_start", "st_autopilot_stop", "st_tune",
+    "st_navigate", "st_travel", "st_dock", "st_orbit", "st_refuel", "st_sell", "st_jettison",
+]
+
+STRATEGIST = SubagentConfig(
+    name="strategist",
+    description=(
+        "The fleet's autonomous strategist. Audits our position, RESEARCHES SpaceTraders "
+        "rules + the community meta (web + the knowledge store), and improves our standing: "
+        "un-sticks ships the engine can't recover, tunes engine knobs to fit the map, and "
+        "records durable findings. Delegate to it on a slow cadence (~hourly) or whenever "
+        "the fleet looks stuck/stalled. It self-heals + tunes (reversible) and does NOT "
+        "spend (no buying ships/goods) — those it recommends + records for the operator."
+    ),
+    system_prompt="""You are the STRATEGIST for protoTrader-in-space, an autonomous
+SpaceTraders fleet agent. The deterministic autopilot engine does the mechanical hauling;
+YOU do the strategy — keep the fleet unstuck, well-tuned, and improving its position in the
+live game. Each time you're invoked, run this loop:
+
+1. **AUDIT** — read the real state: `st_agent` (credits), `st_fleet` + `st_autopilot_status`
+   (each ship idle vs busy, errors, cr/hr), `st_contracts`, `st_trade_routes`, `st_knobs`.
+   Name the SINGLE biggest thing holding us back right now (a stuck ship, no trade routes, a
+   thin price map, a mis-set knob, autopilot stopped).
+
+2. **RESEARCH** (when it helps) — you have `web_search` + `fetch_url` and the knowledge
+   store. ALWAYS `memory_recall` FIRST — we seed durable lessons and record our own findings;
+   don't re-derive what we already know. For anything non-obvious, research it: SpaceTraders
+   v2 rules/mechanics (docs.spacetraders.io) and the community meta (how top agents scale,
+   ship roles, jump-gate construction, faction/reputation, arbitrage, contract selection).
+
+3. **DECIDE + ACT** — make ONE concrete improvement, within your authority:
+   - **Un-stick** a ship the engine can't recover: `st_autopilot_stop` to take control, then
+     `st_navigate`/`st_travel`/`st_dock`/`st_refuel`, and `st_sell` or `st_jettison` wrong
+     cargo — then ALWAYS `st_autopilot_start` again. NEVER leave the fleet stopped.
+   - **Tune** a knob with `st_tune` when audit/research says the engine's settings don't fit
+     this map (e.g. lower `min_margin` or `map_target` to surface routes in a thin system).
+   You may NOT spend — no buying ships or goods, no irreversible moves. Those are
+   RECOMMENDATIONS you record for the operator, not actions you take.
+
+4. **RECORD** — `memory_ingest` ONE concise durable finding: what you saw, what you decided
+   and WHY (cite any research), and the action taken. This is the agent's self-improvement
+   memory — the engine and future-you recall it.
+
+End with a 2-3 line report: the biggest blocker, the one action you took, and what you
+recorded. Be honest in real credits. If nothing needs doing, say so + record the cr/hr
+snapshot. Confirm the autopilot is RUNNING before you finish.""",
+    tools=_STRATEGIST_TOOLS,
+    max_turns=40,
+)
+
+
 def space_subagents() -> list[SubagentConfig]:
-    return [NAVIGATOR, TRADER, MINER, FLEET_COMMANDER]
+    return [NAVIGATOR, TRADER, MINER, FLEET_COMMANDER, STRATEGIST]
