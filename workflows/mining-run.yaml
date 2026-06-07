@@ -1,0 +1,65 @@
+# protoTrader-in-space workflow preset — a full mining run.
+# Fly to an asteroid → fill the hold with a target ore → find who buys it →
+# fly there → sell. Over the space crew (navigator + miner + trader). Stateful
+# game, so per-reset specifics (ship, system, asteroid, ore) are inputs. Run it:
+#   run_workflow("mining-run",
+#     {"ship": "PROTOTRADERS-1", "system": "X1-XU2",
+#      "asteroid": "X1-XU2-B27", "ore": "IRON_ORE"})
+name: mining-run
+description: >-
+  Mine a target ore and sell it — fly to the asteroid, fill the hold (survey +
+  targeted extract), find the best buyer, haul there, and sell. Game actions, not
+  advice.
+version: 1
+inputs:
+  - name: ship
+    description: A ship with a mining mount, e.g. "PROTOTRADERS-1".
+    required: true
+  - name: system
+    description: The system to operate in, e.g. "X1-XU2".
+    required: true
+  - name: asteroid
+    description: The asteroid waypoint to mine, e.g. "X1-XU2-B27".
+    required: true
+  - name: ore
+    description: The ore to target, e.g. "IRON_ORE".
+    required: true
+steps:
+  - id: go_mine
+    subagent: navigator
+    prompt: |
+      Get ship {{inputs.ship}} to asteroid {{inputs.asteroid}} and leave it in
+      ORBIT (mining needs orbit, not docked). Use st_travel and keep calling it
+      through any fuel stop until the ship is at the asteroid. Report its status.
+  - id: mine
+    subagent: miner
+    depends_on: [go_mine]
+    prompt: |
+      Ship {{inputs.ship}} is at asteroid {{inputs.asteroid}}. Fill its hold with
+      {{inputs.ore}}: survey, then extract with prefer="{{inputs.ore}}", pacing for
+      the cooldown, jettisoning junk that crowds out the target. If a couple of
+      surveys never show {{inputs.ore}}, say so honestly — this rock may not have
+      it (then it's cheaper to buy). Report what you mined and the cargo.
+  - id: find_buyer
+    subagent: trader
+    depends_on: [mine]
+    prompt: |
+      We are holding {{inputs.ore}} mined at {{inputs.asteroid}}. Use
+      st_find_market({{inputs.system}}, {{inputs.ore}}) to find the best place to
+      SELL it (a market that imports it pays most). State the exact sell waypoint.
+  - id: go_sell
+    subagent: navigator
+    depends_on: [find_buyer]
+    prompt: |
+      Get ship {{inputs.ship}} to the SELL waypoint below and DOCK it (selling
+      needs docked). Use st_travel through any fuel stop until it's there.
+
+      BUYER REPORT:
+      {{steps.find_buyer.output}}
+  - id: sell
+    subagent: trader
+    depends_on: [go_sell]
+    prompt: |
+      {{inputs.ship}} is docked at the buyer. Sell all the {{inputs.ore}} in its
+      hold (st_sell). Report units sold, the price, and the new credit balance.
+output: "{{steps.sell.output}}"

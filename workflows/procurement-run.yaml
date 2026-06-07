@@ -1,0 +1,79 @@
+# protoTrader-in-space workflow preset — run a SpaceTraders PROCUREMENT contract.
+# Scout the supply chain → fly to the source → buy the goods → fly to the sink →
+# deliver + fulfill, over the space crew (trader + navigator). Stateful game, so
+# the inputs carry the per-reset specifics (ship, system, good, contract id) —
+# nothing per-reset is baked into the recipe. Run it with:
+#   run_workflow("procurement-run",
+#     {"good": "ALUMINUM_ORE", "system": "X1-XU2", "ship": "PROTOTRADERS-1",
+#      "contract_id": "...", "units": 57})
+name: procurement-run
+description: >-
+  Close out a SpaceTraders procurement contract end to end — find where the good
+  is sold and where it's needed, move the ship, buy the units, deliver, and
+  fulfill for the payout. Game actions, not advice.
+version: 1
+inputs:
+  - name: good
+    description: The trade good the contract wants, e.g. "ALUMINUM_ORE".
+    required: true
+  - name: system
+    description: The system to operate in, e.g. "X1-XU2".
+    required: true
+  - name: ship
+    description: The ship that will carry the goods, e.g. "PROTOTRADERS-1".
+    required: true
+  - name: contract_id
+    description: The accepted contract's id.
+    required: true
+  - name: units
+    description: Total units the contract requires.
+    required: true
+steps:
+  - id: scout
+    subagent: trader
+    prompt: |
+      For contract {{inputs.contract_id}} we must deliver {{inputs.units}} units of
+      {{inputs.good}} in system {{inputs.system}}. Use st_find_market to map the
+      supply chain: state the exact waypoint to BUY {{inputs.good}} (cheapest
+      export) and the exact waypoint to DELIVER it (the importer / contract sink).
+      Give both waypoint symbols clearly — the crew will fly to them.
+  - id: go_buy
+    subagent: navigator
+    depends_on: [scout]
+    prompt: |
+      Get ship {{inputs.ship}} to the BUY waypoint identified below and DOCK it
+      there (purchasing needs a docked ship). Use st_travel and keep calling it
+      (waiting out any fuel stop) until the ship is actually at the buy waypoint —
+      do not give up if it routes via a fuel station. Report when it's docked.
+
+      SCOUT REPORT:
+      {{steps.scout.output}}
+  - id: buy
+    subagent: trader
+    depends_on: [go_buy]
+    prompt: |
+      {{inputs.ship}} should now be docked at the buy market. Purchase
+      {{inputs.good}} toward the {{inputs.units}}-unit contract, up to the ship's
+      cargo capacity (jettison/sell worthless cargo first if the hold is full).
+      Report units bought, price, and remaining hold space.
+  - id: go_deliver
+    subagent: navigator
+    depends_on: [buy]
+    prompt: |
+      Get ship {{inputs.ship}} to the DELIVER waypoint from the scout report and
+      DOCK it there. Use st_travel and keep calling it (waiting out any fuel stop)
+      until the ship is actually at the delivery waypoint. Report when docked.
+
+      SCOUT REPORT:
+      {{steps.scout.output}}
+  - id: deliver
+    subagent: trader
+    depends_on: [go_deliver]
+    prompt: |
+      {{inputs.ship}} is docked at the delivery waypoint for contract
+      {{inputs.contract_id}}. Deliver all {{inputs.good}} in its hold toward the
+      contract (st_deliver). If the contract's delivered count now meets the
+      required {{inputs.units}}, call st_fulfill_contract to collect the payout. If
+      more units are still needed, say exactly how many remain for another run.
+      Report the final contract state and credit balance.
+output: "{{steps.deliver.output}}"

@@ -1,0 +1,38 @@
+# protoTrader-in-space workflow preset — grow the fleet.
+# Send a scout to a shipyard and buy a ship there (a mining drone to mine
+# unattended, a hauler for cargo, a probe to scout markets). Buying requires one
+# of your ships present at the shipyard, so the scout flies in first. Run it:
+#   run_workflow("fleet-bootstrap",
+#     {"scout": "PROTOTRADERS-2", "shipyard": "X1-XU2-A2",
+#      "ship_type": "SHIP_MINING_DRONE"})
+name: fleet-bootstrap
+description: >-
+  Add a ship to the fleet — fly a scout to a shipyard and purchase a ship there
+  (mining drone / hauler / probe). The scaling move; check credits first.
+version: 1
+inputs:
+  - name: scout
+    description: A ship to send to the shipyard (its presence enables the purchase).
+    required: true
+  - name: shipyard
+    description: A SHIPYARD waypoint that sells the desired ship, e.g. "X1-XU2-A2".
+    required: true
+  - name: ship_type
+    description: The ship type to buy, e.g. "SHIP_MINING_DRONE", "SHIP_LIGHT_HAULER".
+    required: true
+steps:
+  - id: go_yard
+    subagent: navigator
+    prompt: |
+      Get ship {{inputs.scout}} to shipyard {{inputs.shipyard}} and DOCK it. Use
+      st_travel through any fuel stop until it's there. Report when docked.
+  - id: buy
+    subagent: trader
+    depends_on: [go_yard]
+    prompt: |
+      A ship ({{inputs.scout}}) is now at shipyard {{inputs.shipyard}}. Check the
+      shipyard (st_shipyard) for the price of {{inputs.ship_type}}, confirm we can
+      afford it (st_agent for credits), then buy it (st_buy_ship). If we can't
+      afford it or the yard doesn't sell that type, say so and stop — don't guess.
+      Report the new ship, the price paid, and the remaining credit balance.
+output: "{{steps.buy.output}}"

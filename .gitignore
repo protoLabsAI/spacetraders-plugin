@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+# the agent's SpaceTraders token is per-deployment state — never commit it
+spacetraders.token
+config/spacetraders.token
