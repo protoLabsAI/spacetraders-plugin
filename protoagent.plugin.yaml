@@ -32,4 +32,4 @@ settings:
 # Console view (ADR 0026) — a left-rail "Fleet" icon opens a live dashboard
 # (credits, ships, contracts, the autopilot) served at the path below.
 views:
-  - { id: fleet, label: "Fleet", icon: "LayoutDashboard", path: "/plugins/spacetraders/dashboard" }
+  - { id: fleet, label: "Fleet", icon: "Rocket", path: "/plugins/spacetraders/dashboard" }
