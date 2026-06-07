@@ -275,12 +275,20 @@ async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *, log=None)
     return f"traded {held}×{good} → {r['transaction']['totalPrice']:,} cr"
 
 
-async def job_scout(sym: str, market_waypoints: list, *, log=None) -> dict:
+async def job_scout(sym: str, market_waypoints: list, deadline: float, *, log=None) -> dict:
     """Visit markets and record live per-unit prices into the persistent price map (a
-    ship present unlocks them) — this is what fills the map the trade finder reasons over."""
+    ship present unlocks them) — this is what fills the map the trade finder reasons over.
+
+    Stops at the window ``deadline`` so EVERY ship's job finishes together and the engine
+    loops to a fresh window promptly — otherwise a long, unbounded sweep strands the faster
+    contract/trade ships idle (they finish, then wait on the scouts). Resumes next window;
+    the price map persists, so coverage accrues across windows either way.
+    """
     from . import prices as _pricemem
     seen: dict[str, dict] = {}
     for wp in market_waypoints:
+        if _now() >= deadline:
+            break
         if not await travel_to(sym, wp, log=log):
             continue
         await C.call("POST", f"/my/ships/{sym}/dock")
@@ -561,7 +569,7 @@ async def autopilot(minutes: float, *, log=None) -> dict:
     for i, p in enumerate(probes):
         if market_wps:
             share = market_wps[i::len(probes)] or market_wps
-            jobs[p["symbol"]] = job_scout(p["symbol"], share, log=log)
+            jobs[p["symbol"]] = job_scout(p["symbol"], share, deadline, log=log)
     if cargo_ships:
         jobs[cargo_ships[0]["symbol"]] = _contract_loop(
             cargo_ships[0]["symbol"], deadline, claimed, lock, log=log)
