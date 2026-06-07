@@ -254,17 +254,20 @@ async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *, log=None)
 
 
 async def job_scout(sym: str, market_waypoints: list, *, log=None) -> dict:
-    """Visit markets and record live per-unit prices (a ship present unlocks them)."""
-    prices: dict[str, dict] = {}
+    """Visit markets and record live per-unit prices into the persistent price map (a
+    ship present unlocks them) — this is what fills the map the trade finder reasons over."""
+    from . import prices as _pricemem
+    seen: dict[str, dict] = {}
     for wp in market_waypoints:
         if not await travel_to(sym, wp, log=log):
             continue
         await C.call("POST", f"/my/ships/{sym}/dock")
         system = T._system_of(wp)
         m = await C.call("GET", f"/systems/{system}/waypoints/{wp}/market")
-        prices[wp] = {g["symbol"]: (g["purchasePrice"], g["sellPrice"])
-                      for g in m.get("tradeGoods", [])}
-    return prices
+        tg = m.get("tradeGoods", [])
+        _pricemem.record_market(system, wp, tg)
+        seen[wp] = {g["symbol"]: (g["purchasePrice"], g["sellPrice"]) for g in tg}
+    return seen
 
 
 # ── autopilot — drive the whole fleet toward an objective for a time window ──
@@ -381,17 +384,20 @@ async def _best_trade_route(system: str, market_wps: list) -> dict | None:
                      "profit_per_unit": sell_price - buy_price}
             _ROUTE_CACHE.update(at=now, route=route)
             return route
-    # Full scan — and REMEMBER the best so the agent recalls it next time / next wipe.
-    markets = []
+    # Refresh the persistent PRICE MAP for any currently-lit markets, then run arbitrage
+    # over the RECORDED map (built up as probes sweep the system) — not just what's lit
+    # right now, which is almost never two markets at once. This is what makes spatial
+    # arbitrage actually work, and REMEMBER the best so the agent recalls it next wipe.
+    from . import prices
     for wp in market_wps:
         try:
             m = await C.call("GET", f"/systems/{system}/waypoints/{wp}/market")
         except C.SpaceTradersError:
             continue
         if m.get("tradeGoods"):
-            markets.append({"waypointSymbol": wp, "tradeGoods": m["tradeGoods"]})
+            prices.record_market(system, wp, m["tradeGoods"])
     from .analysis import best_arbitrage
-    best = best_arbitrage(markets)
+    best = best_arbitrage(prices.price_map(system))
     route = best if best and best.get("profit_per_unit", 0) >= _MIN_MARGIN else None
     if route:
         routes.remember_route(system, route["good"], route["buy_at"],
