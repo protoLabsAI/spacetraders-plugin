@@ -97,6 +97,18 @@ LESSONS: list[tuple[str, str]] = [
         "even once the target is met. To close it, drive a turn in that session (or "
         "set the standing goal inside the loop's own context). Ground-truth the goal "
         "with a command/data verifier against live state, never the chat transcript.")),
+    ("zero-to-million", (
+        "Path from a fresh start to ~1,000,000 credits: (1) CONTRACTS are the capital "
+        "base but capped at ONE active per agent — work them back-to-back with one "
+        "cargo ship for fixed payouts; don't expect them to scale. (2) TRADE ARBITRAGE "
+        "is the scaling lever — each hauler runs an INDEPENDENT buy-export-cheap / "
+        "sell-import-expensive route, so credits compound with fleet size (the "
+        "leaderboard whales run 27-39 ships). (3) SCOUT markets with probes — prices "
+        "only show with a ship present, and trade decisions need that intel. (4) "
+        "REINVEST profit into LIGHT_HAULERs once capital comfortably exceeds the ~290k "
+        "cost AND a profitable route exists to put them on. (5) GUARD every buy: skip "
+        "when sell<=buy (saturation), and never accept an un-sourceable contract. "
+        "Contracts seed it, trade compounds it, scouting informs it, guards protect it.")),
     ("check-live-prices", (
         "Structural arbitrage (st_trade_routes export→import) tells you WHAT flows "
         "where, but not whether it's profitable RIGHT NOW. Saturated markets can have "

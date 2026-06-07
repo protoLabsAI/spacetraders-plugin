@@ -348,11 +348,88 @@ async def _mining_loop(sym: str, deadline: float, asteroid: str, market: str, *,
     return f"{runs} mining run(s), +{earned:,} cr"
 
 
+# Growth-engine knobs (zero-to-million doctrine): contracts seed, trade compounds.
+_MIN_MARGIN = 30        # cr/unit floor for a trade route (fuel/time eats less than this)
+_BUY_BUFFER = 600_000   # only reinvest in a hauler when this comfortable (cost ~290k)
+_MAX_SHIPS = 8          # cap auto-bought fleet size
+_ROUTE_CACHE: dict = {"at": -1e9, "route": None}
+
+
+async def _best_trade_route(system: str, market_wps: list) -> dict | None:
+    """The best CURRENTLY-profitable arbitrage route from markets with live prices
+    (a ship present unlocks prices). Cached 60s — scanning every market is costly."""
+    now = _now()
+    if _ROUTE_CACHE["route"] is not None and now - _ROUTE_CACHE["at"] < 60:
+        return _ROUTE_CACHE["route"]
+    markets = []
+    for wp in market_wps:
+        try:
+            m = await C.call("GET", f"/systems/{system}/waypoints/{wp}/market")
+        except C.SpaceTradersError:
+            continue
+        if m.get("tradeGoods"):
+            markets.append({"waypointSymbol": wp, "tradeGoods": m["tradeGoods"]})
+    from .analysis import best_arbitrage
+    best = best_arbitrage(markets)
+    route = best if best and best.get("profit_per_unit", 0) >= _MIN_MARGIN else None
+    _ROUTE_CACHE.update(at=now, route=route)
+    return route
+
+
+async def _trade_loop(sym: str, deadline: float, system: str, market_wps: list, *, log=None) -> str:
+    """A cargo ship: run the best profitable arbitrage route, re-evaluating each round
+    so it adapts when a market saturates. job_trade is spread-guarded (no loss legs)."""
+    runs = 0
+    while _now() < deadline:
+        route = await _best_trade_route(system, market_wps)
+        if not route:
+            await asyncio.sleep(15)           # wait for probes to scout a profitable spread
+            continue
+        res = await job_trade(sym, route["good"], route["buy_at"], route["sell_at"], log=log)
+        if log:
+            log(f"{sym}: {res}")
+        runs += 1
+        if "skipped" in res:                 # this route went unprofitable (saturation)
+            _ROUTE_CACHE["at"] = -1e9         # force a re-scan next round
+    return f"completed {runs} trade run(s)" if runs else "no profitable route this window — idled"
+
+
+async def _maybe_buy_hauler(ships: list, system: str, *, log=None) -> None:
+    """Reinvest profit into a LIGHT_HAULER when capital is comfortable and there's
+    room to grow. Best-effort: a probe (flies free) ferries to a shipyard to buy it;
+    the new hauler joins the trade rotation next window. Guarded by _BUY_BUFFER."""
+    if len(ships) >= _MAX_SHIPS or await _credits() < _BUY_BUFFER:
+        return
+    try:
+        yards = await C.call("GET", f"/systems/{system}/waypoints",
+                             params={"traits": "SHIPYARD", "limit": 20})
+    except C.SpaceTradersError:
+        return
+    if not yards:
+        return
+    yard = yards[0]["symbol"]
+    mover = next((s for s in ships if s["fuel"].get("capacity", 0) == 0), None)  # probe = free
+    if mover is None:
+        return
+    if not await travel_to(mover["symbol"], yard, log=log):
+        return
+    try:
+        r = await C.call("POST", "/my/ships",
+                         json={"shipType": "SHIP_LIGHT_HAULER", "waypointSymbol": yard})
+        if log:
+            log(f"reinvest: bought {r['ship']['symbol']} (LIGHT_HAULER) @ {yard}")
+    except C.SpaceTradersError as e:
+        if log:
+            log(f"reinvest skipped: {e}")
+
+
 async def autopilot(minutes: float, *, log=None) -> dict:
-    """Run the fleet toward max credits for ``minutes``. Contracts are per-AGENT
-    (only one active), so ONE cargo ship works contracts (negotiate→buy→deliver→
-    fulfill, repeat) while the others mine ore and sell it; probes scout markets.
-    One shared rate budget. Returns a credits/$-per-hour summary + per-ship results."""
+    """Run the fleet toward max credits for ``minutes`` — the zero-to-million engine.
+    Contracts are per-AGENT (one active), so ONE cargo ship works contracts (the
+    capital base) while the OTHERS run profitable trade routes (the scaling lever,
+    each independent + spread-guarded); probes scout markets for price intel; profit
+    is reinvested into haulers when capital allows. One shared rate budget. Returns a
+    credits/hr summary + per-ship results."""
     start_credits = await _credits()
     deadline = _now() + minutes * 60.0
     ships = await C.call("GET", "/my/ships")
@@ -366,19 +443,26 @@ async def autopilot(minutes: float, *, log=None) -> dict:
                            params={"traits": "MARKETPLACE", "limit": 20})
         market_wps = [w["symbol"] for w in wps]
 
-    # Starter policy (simple, never loss-making): ONE cargo ship works contracts —
-    # the reliable earner. Other cargo ships stay PARKED: default mining/trading
-    # just burned fuel for ~0 cr (and over-mining crashes prices), so it's an opt-in
-    # expansion (job_mining / job_trade / the workflows), not the default. Probes
-    # scout for free. The operator grows into multi-ship trade when ready.
+    # Growth engine (zero-to-million): reinvest profit first, then assign by role.
+    #   • probes SCOUT markets — free, and it builds the price map trade needs;
+    #   • ONE cargo ship works CONTRACTS (the capital base — capped at 1/agent);
+    #   • every OTHER cargo ship runs the best profitable TRADE route (the scaling
+    #     lever — independent + spread-guarded; idles, never loses, if none yet).
+    if system:
+        await _maybe_buy_hauler(ships, system, log=log)
+        ships = await C.call("GET", "/my/ships")   # refresh after a possible buy
     jobs = {}
     cargo_ships = [s for s in ships if s["cargo"]["capacity"] > 0]
+    probes = [s for s in ships if s["cargo"]["capacity"] == 0]
+    for p in probes:
+        if market_wps:
+            jobs[p["symbol"]] = job_scout(p["symbol"], market_wps[:8], log=log)
     if cargo_ships:
-        sym = cargo_ships[0]["symbol"]
-        jobs[sym] = _contract_loop(sym, deadline, claimed, lock, log=log)
-    for s in ships:  # probes scout for free — no fuel, no loss
-        if s["cargo"]["capacity"] == 0 and market_wps:
-            jobs[s["symbol"]] = job_scout(s["symbol"], market_wps[:8], log=log)
+        jobs[cargo_ships[0]["symbol"]] = _contract_loop(
+            cargo_ships[0]["symbol"], deadline, claimed, lock, log=log)
+        for s in cargo_ships[1:]:
+            if system and market_wps:
+                jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps, log=log)
 
     results = await run_fleet(jobs, log=log)
     end_credits = await _credits()

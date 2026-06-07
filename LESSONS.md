@@ -44,6 +44,12 @@ PYTHONPATH=. python plugins/spacetraders/seed_kb.py        # → ~/.protoagent/k
   the session it was set in; credits earned by the background engine or a scheduler
   tick (a different context) won't auto-close it. Drive a turn in that session to
   close it, and ground-truth the verifier against live state, not the transcript.
+- **zero-to-million** — fresh-start → ~1M: contracts are the capital base (capped at
+  ONE active/agent, don't scale); **trade arbitrage is the scaling lever** (each hauler
+  an independent buy-cheap/sell-high route — whales run 27–39 ships); scout markets with
+  probes (prices need a ship present); reinvest into LIGHT_HAULERs once capital > ~290k +
+  a profitable route exists; guard every buy (skip sell≤buy). Contracts seed, trade
+  compounds, scouting informs, guards protect.
 - **check-live-prices** — `st_trade_routes` shows structural arbitrage; saturated
   markets can have sell BELOW buy (seen live: H51 ALUMINUM 156/76 — a guaranteed
   loss). Confirm live prices (`st_market`) before a trade leg; contracts carry less
