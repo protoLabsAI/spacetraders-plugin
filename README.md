@@ -9,6 +9,11 @@ hands-off: contracts seed it, trade compounds it, scouting informs it, guards pr
 This is a **full-bundle plugin** (ADR 0027): one directory contributes the whole
 extension set, all auto-discovered.
 
+> **Just want to run it?** [**protoTrader-in-space**](https://github.com/protoLabsAI/protoTrader-in-space)
+> is a ready-to-run reference agent that consumes this plugin — `git clone`, `plugin sync`,
+> drop in a token, `python -m server`, and watch an autonomous fleet commander play.
+> Spin-up-and-go.
+
 | Contribution | What |
 |---|---|
 | **Tools** (31) | register, agent/fleet status, fuel-aware `st_travel`, markets, `st_trade_routes`, contracts, mining, buy/sell, shipyard, and the background **growth engine** (`st_autopilot_start`/`stop`/`status`) |
