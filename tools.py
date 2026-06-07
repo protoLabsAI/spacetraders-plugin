@@ -886,6 +886,39 @@ def _harden(tools: list) -> list:
     return tools
 
 
+@tool
+async def st_best_arbitrage(system: str = "") -> str:
+    """Find the most profitable export→import trade across a system's markets.
+
+    Scans every marketplace in the system and ranks same-good buy→sell spreads
+    (only goods with live price data — i.e. where a ship has visited — show prices).
+    Defaults to your HQ system. Core ranking by analysis.best_arbitrage, authored by
+    the proto coding agent over ACP.
+    """
+    from .analysis import best_arbitrage
+    if not system:
+        agent = await call("GET", "/my/agent")
+        system = _system_of(agent["headquarters"])
+    try:
+        wps = await call("GET", f"/systems/{system}/waypoints",
+                         params={"traits": "MARKETPLACE", "limit": 20})
+    except SpaceTradersError as e:
+        return f"Error: {e}"
+    markets = []
+    for w in wps if isinstance(wps, list) else []:
+        try:
+            m = await call("GET", f"/systems/{system}/waypoints/{w['symbol']}/market")
+            markets.append({"waypointSymbol": w["symbol"], "tradeGoods": m.get("tradeGoods", [])})
+        except SpaceTradersError:
+            continue
+    best = best_arbitrage(markets)
+    if not best:
+        return (f"No profitable arbitrage found across {len(markets)} markets in {system} "
+                f"(prices show only where a ship has visited).")
+    return (f"Best arbitrage in {system}: buy {best['good']} at {best['buy_at']}, "
+            f"sell at {best['sell_at']} → +{best['profit_per_unit']:,} cr/unit.")
+
+
 def get_spacetraders_tools() -> list:
     return _harden([
         register_agent, st_agent, st_fleet, st_fleet_status,
@@ -896,4 +929,5 @@ def get_spacetraders_tools() -> list:
         st_survey, st_extract, st_jettison, st_purchase, st_sell,
         st_contracts, st_accept_contract, st_negotiate_contract,
         st_deliver, st_fulfill_contract,
+        st_best_arbitrage,
     ])
