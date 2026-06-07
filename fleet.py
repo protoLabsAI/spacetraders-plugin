@@ -507,6 +507,23 @@ async def _trade_loop(sym: str, deadline: float, system: str, market_wps: list, 
     return f"completed {runs} trade run(s)" if runs else "no profitable route this window — idled"
 
 
+async def _contract_then_trade(sym: str, deadline: float, claimed: set, lock, system: str,
+                               market_wps: list, *, log=None) -> str:
+    """The lead cargo ship works contracts, but if there's no WORKABLE contract this window
+    (declined as un-sourceable/unreachable, or a slot blocked by an un-fulfillable accepted
+    one), it FALLS BACK to trade routes for the rest of the window instead of sitting idle —
+    so the only cargo ship keeps earning even while a dead contract waits out its expiry."""
+    res = await _contract_loop(sym, deadline, claimed, lock, log=log)
+    stuck = any(k in res for k in ("declined", "unreachable", "no more available",
+                                   "could not", "couldn't", "skipped"))
+    if stuck and _now() < deadline and system and market_wps:
+        if log:
+            log(f"{sym}: no workable contract ({res}) — trading instead")
+        tres = await _trade_loop(sym, deadline, system, market_wps, log=log)
+        return f"{res}; fell back to trade → {tres}"
+    return res
+
+
 async def _buy_ship_at_yard(ships: list, system: str, ship_type: str, *, log=None) -> bool:
     """Ferry a free-flying probe to a shipyard and buy ``ship_type``. Best-effort."""
     try:
@@ -614,8 +631,8 @@ async def autopilot(minutes: float, *, log=None) -> dict:
             share = market_wps[i::len(probes)] or market_wps
             jobs[p["symbol"]] = job_scout(p["symbol"], share, deadline, log=log)
     if cargo_ships:
-        jobs[cargo_ships[0]["symbol"]] = _contract_loop(
-            cargo_ships[0]["symbol"], deadline, claimed, lock, log=log)
+        jobs[cargo_ships[0]["symbol"]] = _contract_then_trade(
+            cargo_ships[0]["symbol"], deadline, claimed, lock, system, market_wps, log=log)
         for s in cargo_ships[1:]:
             if system and market_wps:
                 jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps, log=log)
