@@ -64,8 +64,11 @@ def _ship_row(s: dict) -> dict:
         "fuel": ("∞" if fuel.get("capacity", 0) == 0
                  else f"{fuel.get('current', '?')}/{fuel.get('capacity', '?')}"),
         "cargo": f"{cargo.get('units', 0)}/{cargo.get('capacity', 0)}",
-        # Where it's headed (in-transit only) — dest, ISO arrival (JS ticks the ETA), mode.
+        # Where it's headed (in-transit only) — dest, ISO arrival (JS ticks the ETA), mode,
+        # plus origin + departure so the map can interpolate its position along the route.
         "dest": (route.get("destination") or {}).get("symbol") if in_transit else None,
+        "origin": (route.get("origin") or {}).get("symbol") if in_transit else None,
+        "departure": route.get("departureTime") if in_transit else None,
         "arrival": route.get("arrival") if in_transit else None,
         "mode": nav.get("flightMode") if in_transit else None,
     }
@@ -249,6 +252,7 @@ _PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Fleet</title
 <script>
 let TOKEN = null;
 let MAPCARDS = {};
+let LAST_D = null;  // last polled state — the 1s ticker re-renders the map so in-transit ships glide
 // Hover detail card for the system map — populated per-element by renderMap.
 const _mc = document.createElement("div"); _mc.id = "mapcard";
 _mc.style.cssText = "position:fixed;display:none;z-index:60;background:var(--card);border:1px solid var(--line);"
@@ -300,10 +304,20 @@ function renderMap(d){
     const goods=(w.goods||[]).map(g=>`${esc(g.symbol)}: <span style="color:var(--ok)">${g.buy}</span> / <span style="color:var(--warn)">${g.sell}</span>`).join('<br>');
     MAPCARDS['w:'+w.symbol]=`<b style="color:var(--acc)">${esc(w.symbol)}</b> · ${esc(w.type)}`+(tags?`<br><span class="sub">${tags}</span>`:'')+(goods?`<br><span style="font-size:11px">buy/sell:<br>${goods}</span>`:(w.market?'<br><span class="sub">not scouted yet</span>':''));
     return `${ring}<circle cx="${sx(w.x)}" cy="${sy(w.y)}" r="${rad}" fill="${c}" data-k="w:${w.symbol}" style="cursor:pointer"/>`;}).join('');
-  const ships=(d.ships||[]).map(s=>{const w=by[s.waypoint];if(!w)return'';const x=sx(w.x),y=sy(w.y);
-    MAPCARDS['s:'+s.symbol]=`<b style="color:#fff">${esc(s.symbol)}</b> · ${esc(s.status)}<br><span class="sub">@ ${esc(s.waypoint)} · ${esc(s.role)} · cargo ${esc(s.cargo)}${s.dest?' · → '+esc(s.dest):''}</span>`;
+  let paths='';
+  const ships=(d.ships||[]).map(s=>{
+    let x,y,extra='';
+    if(s.status==='IN_TRANSIT' && by[s.origin] && by[s.dest]){
+      const o=by[s.origin], dd=by[s.dest];
+      const dep=new Date(s.departure).getTime(), arr=new Date(s.arrival).getTime();
+      let p=(Date.now()-dep)/((arr-dep)||1); p=Math.max(0,Math.min(1,p));
+      x=sx(o.x+(dd.x-o.x)*p); y=sy(o.y+(dd.y-o.y)*p);
+      paths+=`<line x1="${sx(o.x)}" y1="${sy(o.y)}" x2="${sx(dd.x)}" y2="${sy(dd.y)}" stroke="#fff" stroke-width="0.6" stroke-dasharray="2 4" opacity="0.35"/>`;
+      extra=' · in transit';
+    } else { const w=by[s.waypoint]; if(!w) return ''; x=sx(w.x); y=sy(w.y); }
+    MAPCARDS['s:'+s.symbol]=`<b style="color:#fff">${esc(s.symbol)}</b> · ${esc(s.status)}<br><span class="sub">@ ${esc(s.waypoint)} · ${esc(s.role)} · cargo ${esc(s.cargo)}${s.dest?' · → '+esc(s.dest)+extra:''}</span>`;
     return `<rect x="${x-3.5}" y="${y-3.5}" width="7" height="7" fill="#fff" transform="rotate(45 ${x} ${y})" data-k="s:${s.symbol}" style="cursor:pointer"/>`;}).join('');
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="background:#070b10;border:1px solid var(--line);border-radius:8px">${lines}${dots}${ships}</svg>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="background:#070b10;border:1px solid var(--line);border-radius:8px">${lines}${paths}${dots}${ships}</svg>`;
 }
 async function poll(){
   try{
@@ -315,6 +329,7 @@ async function poll(){
   document.getElementById("tick").textContent = "updated " + new Date().toLocaleTimeString();
 }
 function render(d){
+  LAST_D = d;
   const body = document.getElementById("body");
   if(d.error){
     document.getElementById("who").textContent = "";
@@ -364,7 +379,7 @@ function render(d){
   </div>
   <div class="card" style="margin-top:14px"><h2>System map — ${(d.map||{}).system||''}
     <span style="color:var(--mut);font-weight:400;text-transform:none">— ◆ ships · ◯ scouted markets · ┄ learned routes</span></h2>
-    ${renderMap(d)}</div>
+    <div id="mapbox">${renderMap(d)}</div></div>
   <div class="card" style="margin-top:14px"><h2>Fleet (${d.ships.length})</h2>
     <table><tr><th>Ship</th><th>Role</th><th>Status</th><th>Location</th><th>Headed</th><th>Fuel</th><th>Cargo</th></tr>
     ${ships}</table></div>
@@ -377,9 +392,11 @@ function render(d){
   `;
 }
 poll(); setInterval(poll, 8000);
-// Tick the countdowns every second between polls.
+// Tick the countdowns every second between polls, and re-render the map so in-transit
+// ships glide along their routes (re-interpolated against the current time).
 setInterval(()=>{
   document.querySelectorAll('.eta').forEach(e=>{const v=eta(e.dataset.arr); if(v) e.textContent=v;});
   document.querySelectorAll('.wipe').forEach(e=>{e.textContent=dur(e.dataset.next);});
+  const mb=document.getElementById('mapbox'); if(mb && LAST_D) mb.innerHTML=renderMap(LAST_D);
 },1000);
 </script></body></html>"""
