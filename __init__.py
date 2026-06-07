@@ -29,6 +29,25 @@ def register(registry) -> None:
     registry.register_tools(get_spacetraders_tools())
     log.info("[spacetraders] registered galactic fleet/market/contract tools")
 
+    # Goal verifier (ADR 0028, PR1) — ground-truth "reach N credits" against LIVE
+    # game state, in-process, no host shell (replaces the check_credits.py shell-out).
+    # Use: /goal {"condition": "...", "verifier":
+    #   {"type": "plugin", "check": "spacetraders:credits", "args": {"min": 1000000}}}
+    if hasattr(registry, "register_goal_verifier"):
+        async def _verify_credits(spec, ctx):
+            from graph.goals.types import VerifyResult
+
+            from .client import call
+            try:
+                have = (await call("GET", "/my/agent")).get("credits", 0)
+            except Exception as e:  # noqa: BLE001
+                return VerifyResult(False, f"could not read credits: {e}", "")
+            want = int((spec.get("args") or {}).get("min", 0))
+            return VerifyResult(have >= want, f"credits {have:,} / {want:,}", str(have))
+
+        registry.register_goal_verifier("spacetraders:credits", _verify_credits)
+        log.info("[spacetraders] registered goal verifier spacetraders:credits")
+
     # Console fleet dashboard (ADR 0026) — rail view at /plugins/spacetraders/*.
     from .dashboard import build_dashboard_router
     registry.register_router(build_dashboard_router())
