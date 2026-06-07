@@ -36,6 +36,18 @@ PYTHONPATH=. python plugins/spacetraders/seed_kb.py        # → ~/.protoagent/k
 - **self-improvement** — record findings (`memory_ingest`), recall before planning
   (`memory_recall`), track the plan in beads, pursue the operator's goal, and note
   capability gaps so they can become new tools/skills/workflows.
+- **autopilot-supervision** — the background engine (`st_autopilot_start`) sometimes
+  strands a ship (DOCKED full, or stuck mid-route). Each tick, read
+  `st_autopilot_status`; restart the engine or nudge the ship if stuck. Engine
+  start/stop is a lead/commander job — specialists only READ status and report up.
+- **goals-are-per-session** — a `/goal` is evaluated only after a terminal turn in
+  the session it was set in; credits earned by the background engine or a scheduler
+  tick (a different context) won't auto-close it. Drive a turn in that session to
+  close it, and ground-truth the verifier against live state, not the transcript.
+- **check-live-prices** — `st_trade_routes` shows structural arbitrage; saturated
+  markets can have sell BELOW buy (seen live: H51 ALUMINUM 156/76 — a guaranteed
+  loss). Confirm live prices (`st_market`) before a trade leg; contracts carry less
+  price risk and paid the fixed bonuses that grew the treasury past 500k.
 
 ## Onboarding note
 

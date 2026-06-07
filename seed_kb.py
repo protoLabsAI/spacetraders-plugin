@@ -83,6 +83,28 @@ LESSONS: list[tuple[str, str]] = [
         "memory_recall. My plan lives in beads (beads_create/list/update); my "
         "objective is the operator's goal. When I hit a missing capability, I note "
         "it as a gap so it can become a new tool, skill, or workflow next time.")),
+    ("autopilot-supervision", (
+        "The background autopilot (st_autopilot_start) occasionally STRANDS a ship — "
+        "it leaves a hauler DOCKED with a full hold, or stalls one mid-route. Don't "
+        "trust it to be self-healing: each supervision tick, call st_autopilot_status, "
+        "and if a ship is idle/stuck with cargo or the engine isn't running, restart "
+        "it (st_autopilot_start) or nudge the ship (st_travel). Engine start/stop is a "
+        "lead/commander job — specialists only READ st_autopilot_status and report up.")),
+    ("goals-are-per-session", (
+        "A goal (set via /goal) is evaluated only after a TERMINAL TURN IN THE SAME "
+        "SESSION it was set in. Credits earned by the background engine or a scheduler "
+        "tick (a different context) will NOT auto-close the goal — it stays 'active' "
+        "even once the target is met. To close it, drive a turn in that session (or "
+        "set the standing goal inside the loop's own context). Ground-truth the goal "
+        "with a command/data verifier against live state, never the chat transcript.")),
+    ("check-live-prices", (
+        "Structural arbitrage (st_trade_routes export→import) tells you WHAT flows "
+        "where, but not whether it's profitable RIGHT NOW. Saturated markets can have "
+        "sell BELOW buy (seen live: H51 ALUMINUM_ORE buy 156, sell 76 — a guaranteed "
+        "loss). Before committing a trade leg, confirm live per-unit prices with a "
+        "ship/probe at the market (st_market), and prefer the price-ranked best route "
+        "st_trade_routes surfaces. Contracts carry less price risk — they paid the "
+        "fixed bonuses that grew the treasury past 500k.")),
 ]
 
 
