@@ -133,9 +133,13 @@ async def _system_map(system: str) -> dict:
                for w in (raw if isinstance(raw, list) else [])]
         _MAP_CACHE[system] = wps
     from . import prices
-    scouted = {m["waypointSymbol"] for m in prices.price_map(system)}
-    return {"system": system,
-            "waypoints": [{**w, "scouted": w["symbol"] in scouted} for w in wps]}
+    pm = {m["waypointSymbol"]: m["tradeGoods"] for m in prices.price_map(system)}
+    out = []
+    for w in wps:
+        goods = [{"symbol": g["symbol"], "buy": g["purchasePrice"], "sell": g["sellPrice"]}
+                 for g in pm.get(w["symbol"], [])][:8]
+        out.append({**w, "scouted": w["symbol"] in pm, "goods": goods})
+    return {"system": system, "waypoints": out}
 
 
 def _contract_row(c: dict) -> dict:
@@ -244,6 +248,25 @@ _PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Fleet</title
 </div>
 <script>
 let TOKEN = null;
+let MAPCARDS = {};
+// Hover detail card for the system map — populated per-element by renderMap.
+const _mc = document.createElement("div"); _mc.id = "mapcard";
+_mc.style.cssText = "position:fixed;display:none;z-index:60;background:var(--card);border:1px solid var(--line);"
+  + "border-radius:8px;padding:8px 11px;font-size:12px;line-height:1.5;pointer-events:none;max-width:260px;"
+  + "box-shadow:0 6px 22px rgba(0,0,0,.5)";
+document.addEventListener("DOMContentLoaded", ()=>document.body.appendChild(_mc));
+document.addEventListener("mouseover", e=>{
+  const k = e.target && e.target.getAttribute && e.target.getAttribute("data-k");
+  if(k && MAPCARDS[k]){ _mc.innerHTML = MAPCARDS[k]; _mc.style.display = "block"; }
+});
+document.addEventListener("mouseout", e=>{
+  if(e.target && e.target.getAttribute && e.target.getAttribute("data-k")) _mc.style.display = "none";
+});
+document.addEventListener("mousemove", e=>{
+  if(_mc.style.display !== "block") return;
+  const ox = (e.clientX + 16 + 260 > innerWidth) ? e.clientX - 16 - 260 : e.clientX + 16;
+  _mc.style.left = ox + "px"; _mc.style.top = (e.clientY + 16) + "px";
+});
 window.addEventListener("message", e => {
   const m = e.data || {};
   if (m.type !== "protoagent:init") return;
@@ -270,8 +293,16 @@ function renderMap(d){
   const by={}; wps.forEach(w=>by[w.symbol]=w);
   const col={PLANET:'#6db3f2',GAS_GIANT:'#46c46a',MOON:'#9aa0aa',ASTEROID:'#b08d57',ENGINEERED_ASTEROID:'#b08d57',ASTEROID_BASE:'#b08d57',ASTEROID_FIELD:'#b08d57',FUEL_STATION:'#e0a23c',JUMP_GATE:'#9b87f2',ORBITAL_STATION:'#9aa0aa'};
   const lines=(d.routes||[]).map(r=>{const a=by[r.buy_at],b=by[r.sell_at];return (a&&b)?`<line x1="${sx(a.x)}" y1="${sy(a.y)}" x2="${sx(b.x)}" y2="${sy(b.y)}" stroke="#9b87f2" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>`:'';}).join('');
-  const dots=wps.map(w=>{const c=col[w.type]||'#9aa0aa',rad=(w.type==='PLANET'||w.type==='GAS_GIANT')?5:3;const ring=w.scouted?`<circle cx="${sx(w.x)}" cy="${sy(w.y)}" r="${rad+3}" fill="none" stroke="#46c46a" stroke-width="1" opacity="0.6"/>`:'';return `${ring}<circle cx="${sx(w.x)}" cy="${sy(w.y)}" r="${rad}" fill="${c}"><title>${w.symbol} · ${w.type}${w.market?' · market':''}${w.scouted?' · scouted':''}</title></circle>`;}).join('');
-  const ships=(d.ships||[]).map(s=>{const w=by[s.waypoint];if(!w)return'';const x=sx(w.x),y=sy(w.y);return `<rect x="${x-3.5}" y="${y-3.5}" width="7" height="7" fill="#fff" transform="rotate(45 ${x} ${y})"><title>${s.symbol} @ ${s.waypoint}</title></rect>`;}).join('');
+  MAPCARDS={};
+  const esc=s=>(''+s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const dots=wps.map(w=>{const c=col[w.type]||'#9aa0aa',rad=(w.type==='PLANET'||w.type==='GAS_GIANT')?5:3;const ring=w.scouted?`<circle cx="${sx(w.x)}" cy="${sy(w.y)}" r="${rad+3}" fill="none" stroke="#46c46a" stroke-width="1" opacity="0.6"/>`:'';
+    const tags=[w.market?'market':'',w.scouted?'scouted':''].filter(Boolean).join(' · ');
+    const goods=(w.goods||[]).map(g=>`${esc(g.symbol)}: <span style="color:var(--ok)">${g.buy}</span> / <span style="color:var(--warn)">${g.sell}</span>`).join('<br>');
+    MAPCARDS['w:'+w.symbol]=`<b style="color:var(--acc)">${esc(w.symbol)}</b> · ${esc(w.type)}`+(tags?`<br><span class="sub">${tags}</span>`:'')+(goods?`<br><span style="font-size:11px">buy/sell:<br>${goods}</span>`:(w.market?'<br><span class="sub">not scouted yet</span>':''));
+    return `${ring}<circle cx="${sx(w.x)}" cy="${sy(w.y)}" r="${rad}" fill="${c}" data-k="w:${w.symbol}" style="cursor:pointer"/>`;}).join('');
+  const ships=(d.ships||[]).map(s=>{const w=by[s.waypoint];if(!w)return'';const x=sx(w.x),y=sy(w.y);
+    MAPCARDS['s:'+s.symbol]=`<b style="color:#fff">${esc(s.symbol)}</b> · ${esc(s.status)}<br><span class="sub">@ ${esc(s.waypoint)} · ${esc(s.role)} · cargo ${esc(s.cargo)}${s.dest?' · → '+esc(s.dest):''}</span>`;
+    return `<rect x="${x-3.5}" y="${y-3.5}" width="7" height="7" fill="#fff" transform="rotate(45 ${x} ${y})" data-k="s:${s.symbol}" style="cursor:pointer"/>`;}).join('');
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="background:#070b10;border:1px solid var(--line);border-radius:8px">${lines}${dots}${ships}</svg>`;
 }
 async function poll(){
