@@ -370,6 +370,18 @@ async def _best_trade_route(system: str, market_wps: list) -> dict | None:
     now = _now()
     if _ROUTE_CACHE["route"] is not None and now - _ROUTE_CACHE["at"] < 60:
         return _ROUTE_CACHE["route"]
+    from . import routes
+    # Memory fast-path: re-verify a REMEMBERED route's live prices before scanning the
+    # whole system. The agent learns routes over time, so this gets cheaper each window.
+    for r in routes.recall_routes(system):
+        buy_price, _ = await _good_price(r["buy_at"], r["good"])
+        _, sell_price = await _good_price(r["sell_at"], r["good"])
+        if buy_price and sell_price and (sell_price - buy_price) >= _MIN_MARGIN:
+            route = {"good": r["good"], "buy_at": r["buy_at"], "sell_at": r["sell_at"],
+                     "profit_per_unit": sell_price - buy_price}
+            _ROUTE_CACHE.update(at=now, route=route)
+            return route
+    # Full scan — and REMEMBER the best so the agent recalls it next time / next wipe.
     markets = []
     for wp in market_wps:
         try:
@@ -381,6 +393,9 @@ async def _best_trade_route(system: str, market_wps: list) -> dict | None:
     from .analysis import best_arbitrage
     best = best_arbitrage(markets)
     route = best if best and best.get("profit_per_unit", 0) >= _MIN_MARGIN else None
+    if route:
+        routes.remember_route(system, route["good"], route["buy_at"],
+                              route["sell_at"], route["profit_per_unit"])
     _ROUTE_CACHE.update(at=now, route=route)
     return route
 
