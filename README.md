@@ -10,7 +10,7 @@ extension set, all auto-discovered.
 
 | Contribution | What |
 |---|---|
-| **Tools** (30) | register, agent/fleet status, fuel-aware `st_travel`, markets, contracts, mining, buy/sell, shipyard, and the background autopilot (`st_fleet_start`/`stop`/`status`) |
+| **Tools** (30) | register, agent/fleet status, fuel-aware `st_travel`, markets, contracts, mining, buy/sell, shipyard, and the background autopilot (`st_autopilot_start`/`stop`/`status`) |
 | **Subagents** (4) | `navigator`, `trader`, `miner`, `fleet-commander` |
 | **Workflows** | `procurement-run`, `mining-run`, `fleet-bootstrap` (`workflows/`) |
 | **Skills** | `play-spacetraders`, `run-a-procurement-contract`, `maximize-credits-per-hour` (`skills/`) |

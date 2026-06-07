@@ -26,7 +26,7 @@ config:
 secrets: [token, account_token]
 settings:
   - { key: token, label: "Agent token", type: secret, group: "SpaceTraders", description: "Your SpaceTraders AGENT token (lets the agent play). Get it by registering an agent at spacetraders.io, or it's filled in automatically after the agent registers one. Per-reset — re-paste after a universe wipe." }
-  - { key: account_token, label: "Account token", type: secret, group: "SpaceTraders", description: "Optional. Your spacetraders.io ACCOUNT token — only needed to register a brand-new agent (the agent uses register_agent with this). Not needed if you already have an agent token above." }
+  - { key: account_token, label: "Account token", type: secret, group: "SpaceTraders", description: "Optional. Your spacetraders.io ACCOUNT token — only needed to register a brand-new agent (the agent uses st_register with this). Not needed if you already have an agent token above." }
   - { key: call_sign, label: "Call sign", type: string, group: "SpaceTraders", description: "Optional. The agent call sign to register (3–14 chars, A–Z/0–9/_/-), e.g. PROTOTRADERS. Used only when registering a new agent." }
   - { key: faction, label: "Starting faction", type: string, group: "SpaceTraders", description: "Optional. Starting faction for a new agent: COSMIC (default), GALACTIC, QUANTUM, DOMINION, ASTRO." }
 # Console view (ADR 0026) — a left-rail "Fleet" icon opens a live dashboard

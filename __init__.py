@@ -38,7 +38,7 @@ def register(registry) -> None:
     log.info("[spacetraders] registered crew subagents: navigator, trader, miner, fleet-commander")
 
     # Fleet-engine lifecycle surface (ADR 0018) — the background autopilot starts
-    # on demand (st_fleet_start) as an asyncio task; register a surface so it's
+    # on demand (st_autopilot_start) as an asyncio task; register a surface so it's
     # cleanly STOPPED on server shutdown/reload instead of orphaned mid-loop.
     from . import fleet
 

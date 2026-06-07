@@ -376,7 +376,7 @@ def start_ops(minutes: float) -> str:
     _OPS["result"] = None
     _OPS["task"] = asyncio.create_task(_run_ops(minutes))
     return (f"Fleet ops started in the background for ~{minutes:g} min. The whole "
-            f"fleet is working under one rate budget. Check st_fleet_status.")
+            f"fleet is working under one rate budget. Check st_autopilot_status.")
 
 
 def stop_ops() -> str:

@@ -99,7 +99,7 @@ def _ship_line(s: dict) -> str:
 
 
 @tool
-async def register_agent(symbol: str, faction: str = "COSMIC", account_token: str = "") -> str:
+async def st_register(symbol: str, faction: str = "COSMIC", account_token: str = "") -> str:
     """Register a NEW SpaceTraders agent and save its token for all later calls.
 
     Needs an account token (from your spacetraders.io account) — pass it as
@@ -162,11 +162,11 @@ async def st_fleet() -> str:
 
 
 @tool
-async def st_fleet_status() -> str:
+async def st_autopilot_status() -> str:
     """Fleet overview: which ships are IDLE vs BUSY, plus whether the background
     autopilot is running and its recent progress.
 
-    Use this to supervise — start the engine with st_fleet_start, then poll this.
+    Use this to supervise — start the engine with st_autopilot_start, then poll this.
     """
     from . import fleet
     try:
@@ -200,17 +200,17 @@ async def st_fleet_status() -> str:
         elif r.get("stopped"):
             lines.append("AUTOPILOT: stopped")
     else:
-        lines.append("AUTOPILOT: idle (start it with st_fleet_start)")
+        lines.append("AUTOPILOT: idle (start it with st_autopilot_start)")
     return "\n".join(lines)
 
 
 @tool
-async def st_fleet_start(minutes: float = 20) -> str:
+async def st_autopilot_start(minutes: float = 20) -> str:
     """Start the fleet autopilot in the BACKGROUND for `minutes`, then return at once.
 
     Every cargo ship works procurement contracts back-to-back; probes scout. All
     ships share the one rate budget. This does NOT block — it runs while you do
-    other things; poll st_fleet_status to watch progress and credits. This is the
+    other things; poll st_autopilot_status to watch progress and credits. This is the
     hands-off way to keep the fleet earning.
 
     Args:
@@ -221,7 +221,7 @@ async def st_fleet_start(minutes: float = 20) -> str:
 
 
 @tool
-async def st_fleet_stop() -> str:
+async def st_autopilot_stop() -> str:
     """Stop the background fleet autopilot if it's running."""
     from . import fleet
     return fleet.stop_ops()
@@ -277,7 +277,8 @@ async def st_dock(ship: str) -> str:
 
 @tool
 async def st_navigate(ship: str, waypoint: str, mode: str = "") -> str:
-    """Fly a ship to a waypoint in its current system (auto-orbits first).
+    """Low-level single hop with an explicit flight `mode` — prefer st_travel
+    (it handles fuel + routing); use st_navigate only to force a mode. Auto-orbits.
 
     Burns fuel; returns the arrival time. Same system only — use a jump gate for
     interstellar travel. ``mode`` sets the flight mode before flying:
@@ -311,7 +312,7 @@ async def st_navigate(ship: str, waypoint: str, mode: str = "") -> str:
 
 
 @tool
-async def st_route(system: str, from_waypoint: str, to_waypoint: str) -> str:
+async def st_plan_route(system: str, from_waypoint: str, to_waypoint: str) -> str:
     """Plan a hop: distance, CRUISE fuel cost, and the nearest fuel station.
 
     CRUISE fuel cost ≈ the distance, so if a ship's fuel is below this, it can't
@@ -336,7 +337,8 @@ async def st_route(system: str, from_waypoint: str, to_waypoint: str) -> str:
 
 @tool
 async def st_travel(ship: str, destination: str) -> str:
-    """Send a ship toward a destination, handling fuel automatically (one hop).
+    """The DEFAULT way to move a ship: send it to a destination, handling fuel
+    automatically (one hop).
 
     The reliable way to move: it refuels if docked low on fuel, picks CRUISE when
     fuel covers the distance, and otherwise routes via the nearest fuel station —
@@ -620,11 +622,13 @@ async def st_trade_routes(system: str, limit: int = 8) -> str:
         return f"Error: {e}"
     exporters: dict[str, list] = {}
     importers: dict[str, list] = {}
+    markets: list[dict] = []
     for w in wps:
         try:
             m = await call("GET", f"/systems/{system}/waypoints/{w['symbol']}/market")
         except SpaceTradersError:
             continue
+        markets.append({"waypointSymbol": w["symbol"], "tradeGoods": m.get("tradeGoods", [])})
         for g in m.get("exports", []):
             exporters.setdefault(g["symbol"], []).append(w["symbol"])
         for g in m.get("imports", []):
@@ -634,9 +638,14 @@ async def st_trade_routes(system: str, limit: int = 8) -> str:
         routes.append(f"  {good}: buy @ {exporters[good][0]} → sell @ {importers[good][0]}")
     if not routes:
         return f"No export→import arbitrage routes found in {system}."
-    return (f"Trade routes in {system} (buy-export → sell-import):\n"
+    # Price-ranked best, where live prices exist (a ship has visited the market).
+    from .analysis import best_arbitrage
+    best = best_arbitrage(markets)
+    head = (f"💰 Best by price: {best['good']} buy @ {best['buy_at']} → sell @ "
+            f"{best['sell_at']} (+{best['profit_per_unit']:,}/unit)\n" if best else "")
+    return (head + f"Trade routes in {system} (buy-export → sell-import):\n"
             + "\n".join(routes[:limit])
-            + "\n  (use st_market with a ship present for live per-unit prices)")
+            + "\n  (station a ship/probe at a market for live per-unit prices)")
 
 
 # ── Mining + trading ─────────────────────────────────────────────────────────
@@ -886,48 +895,14 @@ def _harden(tools: list) -> list:
     return tools
 
 
-@tool
-async def st_best_arbitrage(system: str = "") -> str:
-    """Find the most profitable export→import trade across a system's markets.
-
-    Scans every marketplace in the system and ranks same-good buy→sell spreads
-    (only goods with live price data — i.e. where a ship has visited — show prices).
-    Defaults to your HQ system. Core ranking by analysis.best_arbitrage, authored by
-    the proto coding agent over ACP.
-    """
-    from .analysis import best_arbitrage
-    if not system:
-        agent = await call("GET", "/my/agent")
-        system = _system_of(agent["headquarters"])
-    try:
-        wps = await call("GET", f"/systems/{system}/waypoints",
-                         params={"traits": "MARKETPLACE", "limit": 20})
-    except SpaceTradersError as e:
-        return f"Error: {e}"
-    markets = []
-    for w in wps if isinstance(wps, list) else []:
-        try:
-            m = await call("GET", f"/systems/{system}/waypoints/{w['symbol']}/market")
-            markets.append({"waypointSymbol": w["symbol"], "tradeGoods": m.get("tradeGoods", [])})
-        except SpaceTradersError:
-            continue
-    best = best_arbitrage(markets)
-    if not best:
-        return (f"No profitable arbitrage found across {len(markets)} markets in {system} "
-                f"(prices show only where a ship has visited).")
-    return (f"Best arbitrage in {system}: buy {best['good']} at {best['buy_at']}, "
-            f"sell at {best['sell_at']} → +{best['profit_per_unit']:,} cr/unit.")
-
-
 def get_spacetraders_tools() -> list:
     return _harden([
-        register_agent, st_agent, st_fleet, st_fleet_status,
-        st_fleet_start, st_fleet_stop, st_ship,
-        st_orbit, st_dock, st_navigate, st_travel, st_route, st_refuel,
+        st_register, st_agent, st_fleet, st_autopilot_status,
+        st_autopilot_start, st_autopilot_stop, st_ship,
+        st_orbit, st_dock, st_navigate, st_travel, st_plan_route, st_refuel,
         st_transfer, st_shipyard, st_buy_ship,
         st_waypoints, st_market, st_find_market, st_trade_routes,
         st_survey, st_extract, st_jettison, st_purchase, st_sell,
         st_contracts, st_accept_contract, st_negotiate_contract,
         st_deliver, st_fulfill_contract,
-        st_best_arbitrage,
     ])

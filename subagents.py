@@ -15,17 +15,17 @@ from __future__ import annotations
 
 from graph.subagents.config import SubagentConfig
 
-# Every specialist gets read-only st_fleet_status so a delegated tick can CHECK
+# Every specialist gets read-only st_autopilot_status so a delegated tick can CHECK
 # whether the background autopilot is running and report up — engine start/stop
-# (st_fleet_start/stop) stays a lead/commander job, so a specialist never tries a
+# (st_autopilot_start/stop) stays a lead/commander job, so a specialist never tries a
 # tool it doesn't have.
-_NAV_TOOLS = ["st_ship", "st_fleet", "st_fleet_status", "st_waypoints", "st_route",
+_NAV_TOOLS = ["st_ship", "st_fleet", "st_autopilot_status", "st_waypoints", "st_plan_route",
               "st_travel", "st_navigate", "st_orbit", "st_dock", "st_refuel"]
-_TRADE_TOOLS = ["st_ship", "st_fleet_status", "st_find_market", "st_market", "st_trade_routes",
+_TRADE_TOOLS = ["st_ship", "st_autopilot_status", "st_find_market", "st_market", "st_trade_routes",
                 "st_purchase", "st_sell", "st_transfer", "st_shipyard", "st_buy_ship",
                 "st_contracts", "st_accept_contract", "st_negotiate_contract",
                 "st_deliver", "st_fulfill_contract"]
-_MINE_TOOLS = ["st_ship", "st_fleet_status", "st_orbit", "st_survey", "st_extract", "st_jettison"]
+_MINE_TOOLS = ["st_ship", "st_autopilot_status", "st_orbit", "st_survey", "st_extract", "st_jettison"]
 
 NAVIGATOR = SubagentConfig(
     name="navigator",
@@ -50,7 +50,7 @@ Procedure:
 3. `st_dock` once arrived only if asked (trading/refuelling needs docked; mining/
    flying needs orbit).
 
-`st_route(system, from, to)` previews distance + fuel cost if you want to plan;
+`st_plan_route(system, from, to)` previews distance + fuel cost if you want to plan;
 raw `st_navigate(ship, waypoint, mode)` (CRUISE/DRIFT/BURN) is the manual escape
 hatch. Report the ship's final status, waypoint, fuel, and ETA if still in transit.
 If a tool errors, read it — it names the state you need. Real positions only.""",
@@ -79,7 +79,7 @@ For an acquisition or a procurement contract:
    all required units, `st_fulfill_contract` to collect the on-fulfilled payout —
    that payment, not the advance, is the prize.
 
-The background autopilot is the commander's engine: call `st_fleet_status` to check
+The background autopilot is the commander's engine: call `st_autopilot_status` to check
 whether it's running, but starting/stopping it isn't your job — if it needs a
 restart, say so and report up. Stay in your lane (markets + contracts).
 
@@ -131,13 +131,13 @@ fly ships leg by leg — you set the objective and run the **autopilot engine**,
 read the result and adapt. Default objective: **maximise credits per hour**.
 
 The loop you run:
-1. **Assess** — `st_agent` (credits), `st_fleet_status` (which ships are idle vs
+1. **Assess** — `st_agent` (credits), `st_autopilot_status` (which ships are idle vs
    busy), `st_contracts` (current work). Know your fleet: cargo ships earn,
    probes scout.
-2. **Run the engine** — `st_fleet_start(minutes)` launches EVERY ship at once under
+2. **Run the engine** — `st_autopilot_start(minutes)` launches EVERY ship at once under
    the one rate budget, in the BACKGROUND (it returns immediately): cargo ships work
-   procurement contracts back-to-back, probes scout. Poll `st_fleet_status` to watch
-   progress + credits; `st_fleet_stop` to halt. Don't hand-fly ships leg by leg —
+   procurement contracts back-to-back, probes scout. Poll `st_autopilot_status` to watch
+   progress + credits; `st_autopilot_stop` to halt. Don't hand-fly ships leg by leg —
    let the engine handle travel/fuel (it auto-DRIFTs; probes fly free).
 3. **Review & adapt** — read the per-ship results and the cr/hr. If a ship got
    stuck (no sourceable contract, out of credits), investigate: `st_contracts` /
@@ -153,7 +153,7 @@ job. Report honestly in real credits — the cr/hr number is the scoreboard. If 
 operator set a different goal (a target balance, build the jump gate, scout a
 region), pursue THAT instead of raw cr/hr.""",
     tools=[
-        "st_agent", "st_fleet", "st_fleet_status", "st_fleet_start", "st_fleet_stop",
+        "st_agent", "st_fleet", "st_autopilot_status", "st_autopilot_start", "st_autopilot_stop",
         "st_contracts", "st_negotiate_contract", "st_trade_routes", "st_find_market",
         "st_shipyard", "st_buy_ship",
     ],

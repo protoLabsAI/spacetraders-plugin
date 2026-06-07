@@ -17,7 +17,7 @@ waypoints; the "market" is real supply/demand at each station.
 
 ## 0. First time only — register
 If `st_agent` errors with "no token", the agent isn't registered yet. Register
-with `register_agent(symbol, faction, account_token)` — the **account_token** comes
+with `st_register(symbol, faction, account_token)` — the **account_token** comes
 from the operator's spacetraders.io account (ask for it; never invent one). The
 agent token is then saved and every other tool just works.
 
@@ -42,7 +42,7 @@ when fuel covers the distance, and otherwise routes via the nearest fuel station
 (DRIFTing only if truly stranded — CRUISE fuel cost ≈ distance, so a low tank far
 from fuel strands a ship). ONE hop returning an ETA; if it reports a fuel stop,
 wait (`st_ship` shows "arriving in Ns") and call it again for the same destination
-until the ship is there. `st_route(system, from, to)` previews distance + fuel.
+until the ship is there. `st_plan_route(system, from, to)` previews distance + fuel.
 Then `st_dock` to trade/refuel, `st_orbit` to mine or fly. Raw
 `st_navigate(ship, waypoint, mode)` (CRUISE/DRIFT/BURN) is the manual escape hatch.
 

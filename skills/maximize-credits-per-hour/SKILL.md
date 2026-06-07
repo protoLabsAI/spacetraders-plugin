@@ -14,8 +14,8 @@ toward a goal — by default, **the most credits per hour**. You *supervise*; th
 **autopilot engine** executes. Don't fly ships leg by leg.
 
 ## The autonomous loop
-1. **Assess** — `st_agent` (credits), `st_fleet_status` (idle vs busy), `st_contracts`.
-2. **Run the engine** — `st_fleet_start(minutes)` (background). It drives every ship at once
+1. **Assess** — `st_agent` (credits), `st_autopilot_status` (idle vs busy), `st_contracts`.
+2. **Run the engine** — `st_autopilot_start(minutes)` (background). It drives every ship at once
    under the one per-account rate budget: cargo ships work procurement contracts
    back-to-back (negotiate → buy → deliver → fulfill), probes scout prices. Pick a
    15–30 min window. It returns **credits gained + cr/hr** and per-ship results.
@@ -31,7 +31,7 @@ Delegate the whole thing to the **fleet-commander** subagent
 ## Make it truly autonomous (recurring, unattended)
 Set it on a timer so it runs without you:
 - **Scheduler tick:** `schedule_task` a recurring prompt, e.g. every 30 min:
-  *"Run st_fleet_start(25), poll st_fleet_status, log the cr/hr; if a ship is stuck, fix it."*
+  *"Run st_autopilot_start(25), poll st_autopilot_status, log the cr/hr; if a ship is stuck, fix it."*
   Each tick wakes the agent, runs a window, and adapts — a continuous money loop.
 - **Goal:** for a target (not just open-ended), set a goal like *"reach 1,000,000
   credits"* and let auto-mode iterate the loop until the verifier passes.

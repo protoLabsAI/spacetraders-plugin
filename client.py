@@ -7,7 +7,7 @@ backoff, and turning the API's error envelope into a readable string. The agent
 tools in ``tools.py`` build on it.
 
 Auth: a per-agent **agent token** (bearer). Get one by registering an agent
-(`register_agent`, needs an **account token** from your spacetraders.io account),
+(`st_register`, needs an **account token** from your spacetraders.io account),
 or paste an existing one. Resolution order: ``SPACETRADERS_TOKEN`` env →
 ``config/spacetraders.token`` (gitignored).
 """
