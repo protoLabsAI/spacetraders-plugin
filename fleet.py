@@ -585,22 +585,19 @@ async def autopilot(minutes: float, *, log=None) -> dict:
 _OPS: dict = {"task": None, "started_minutes": 0.0, "result": None, "log": []}
 
 
-_GOAL_CREDITS = 1_000_000  # engine self-stops at the goal — don't churn the API after winning
-
-
 async def _run_ops(minutes: float) -> None:
     """Run autopilot windows BACK-TO-BACK so the engine self-perpetuates — it no longer
     depends on a scheduler tick to relaunch it (the loopback self-POST is flaky under
-    load). Stops at the credits goal or when stop_ops() cancels it."""
+    load). WHEN to stop is NOT hardcoded here: the operator's objective lives in the
+    substrate's goal system (a `spacetraders:credits` plugin verifier, any target), and
+    its on_achieved hook calls request_stop(). The engine just earns until then."""
     _OPS["log"] = []
+    _OPS["stop"] = False
     try:
-        while True:
-            res = await autopilot(minutes, log=lambda m: _OPS["log"].append(m))
-            _OPS["result"] = res
-            if (res or {}).get("credits_end", 0) >= _GOAL_CREDITS:
-                _OPS["log"].append(f"🎯 goal reached ({res['credits_end']:,} cr) — engine idling")
-                return
+        while not _OPS["stop"]:
+            _OPS["result"] = await autopilot(minutes, log=lambda m: _OPS["log"].append(m))
             await asyncio.sleep(3)   # a breath between windows
+        _OPS["log"].append("engine wound down (goal reached or operator stop)")
     except asyncio.CancelledError:
         _OPS["result"] = {"stopped": True}
         raise
@@ -608,6 +605,12 @@ async def _run_ops(minutes: float) -> None:
         _OPS["result"] = {"error": f"{type(e).__name__}: {e}"}
     finally:
         _OPS["task"] = None
+
+
+def request_stop() -> None:
+    """Signal the self-perpetuating engine to wind down after the current window. Called
+    by the plugin's goal hook when the operator's substrate goal is achieved."""
+    _OPS["stop"] = True
 
 
 def start_ops(minutes: float) -> str:

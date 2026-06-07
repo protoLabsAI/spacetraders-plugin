@@ -48,6 +48,19 @@ def register(registry) -> None:
         registry.register_goal_verifier("spacetraders:credits", _verify_credits)
         log.info("[spacetraders] registered goal verifier spacetraders:credits")
 
+    # Goal hook (ADR 0028, PR3) — when the operator's substrate goal is achieved, wind
+    # down the self-perpetuating engine. This is why WHEN to stop isn't hardcoded in the
+    # engine: the target lives in the goal system (any spacetraders:credits value), and
+    # achieving it stops the fleet here.
+    if hasattr(registry, "register_goal_hook"):
+        def _on_goal_achieved(goal) -> None:
+            from . import fleet
+            fleet.request_stop()
+            log.info("[spacetraders] goal achieved (%s) — winding down the fleet engine",
+                     getattr(goal, "condition", "?"))
+        registry.register_goal_hook(on_achieved=_on_goal_achieved)
+        log.info("[spacetraders] registered goal hook (stop engine on goal achieved)")
+
     # Console fleet dashboard (ADR 0026) — rail view at /plugins/spacetraders/*.
     from .dashboard import build_dashboard_router
     registry.register_router(build_dashboard_router())
