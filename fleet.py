@@ -276,6 +276,7 @@ def _now() -> float:
 
 async def _contract_loop(sym: str, deadline: float, claimed: set, lock, *, log=None) -> str:
     """A cargo ship: claim/negotiate a procurement contract, work it, repeat."""
+    hq = (await C.call("GET", "/my/agent")).get("headquarters")  # negotiate at a faction waypoint
     n = 0
     while _now() < deadline:
         async with lock:
@@ -284,6 +285,14 @@ async def _contract_loop(sym: str, deadline: float, claimed: set, lock, *, log=N
                         if c["accepted"] and not c["fulfilled"] and c["id"] not in claimed), None)
             if not cid:
                 try:
+                    # You negotiate a fresh contract only while DOCKED at a faction
+                    # waypoint — travel to HQ and dock first, or it errors "not docked".
+                    if hq:
+                        await travel_to(sym, hq, log=log)
+                        try:
+                            await C.call("POST", f"/my/ships/{sym}/dock")
+                        except C.SpaceTradersError:
+                            pass
                     d = await C.call("POST", f"/my/ships/{sym}/negotiate/contract")
                     new_ct = d["contract"]
                     # Sourceability guard: do NOT accept a contract whose good no
