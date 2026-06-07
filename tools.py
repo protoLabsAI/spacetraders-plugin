@@ -532,20 +532,31 @@ async def st_buy_ship(waypoint: str, ship_type: str) -> str:
 
 @tool
 async def st_waypoints(system: str, trait: str = "") -> str:
-    """Scan a system's waypoints, optionally filtered by a trait.
+    """Scan ALL of a system's waypoints (auto-paginated — the COMPLETE list, not page 1),
+    optionally filtered by a trait. Includes each waypoint's x,y coordinates.
 
     Useful traits: MARKETPLACE, SHIPYARD, ASTEROID, ASTEROID_FIELD, FUEL_STATION,
-    JUMP_GATE. Omit trait to list everything.
+    JUMP_GATE. Omit trait to list everything. A system can have dozens of waypoints —
+    this returns them all so you never conclude a waypoint is missing from a partial page.
 
     Args:
         system: system symbol, e.g. "X1-DF55".
         trait: optional trait filter.
     """
-    params = {"limit": 20}
+    base = {"limit": 20}
     if trait:
-        params["traits"] = trait.upper()
+        base["traits"] = trait.upper()
+    wps: list = []
     try:
-        wps = await call("GET", f"/systems/{system}/waypoints", params=params)
+        page = 1
+        while page <= 12:  # cap ~240 waypoints — plenty for any system
+            batch = await call("GET", f"/systems/{system}/waypoints", params={**base, "page": page})
+            if not batch:
+                break
+            wps.extend(batch)
+            if len(batch) < 20:
+                break
+            page += 1
     except SpaceTradersError as e:
         return f"Error: {e}"
     if not wps:
@@ -553,8 +564,8 @@ async def st_waypoints(system: str, trait: str = "") -> str:
     lines = []
     for w in wps:
         traits = ",".join(t["symbol"] for t in w.get("traits", []))
-        lines.append(f"  {w['symbol']} [{w['type']}] {traits}")
-    return f"{system} waypoints ({len(wps)}):\n" + "\n".join(lines)
+        lines.append(f"  {w['symbol']} [{w['type']}] ({w.get('x')},{w.get('y')}) {traits}")
+    return f"{system} waypoints ({len(wps)}, complete list):\n" + "\n".join(lines)
 
 
 @tool

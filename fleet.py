@@ -352,6 +352,18 @@ async def _contract_loop(sym: str, deadline: float, claimed: set, lock, *, log=N
             if not buys:
                 return (f"{n} done; declined an un-sourceable {g} contract "
                         f"(no market sells it in-system) — parking, not hauling dead weight")
+            # Reachability guard: decline a contract whose delivery waypoint is beyond the
+            # ship's fuel range — a distant waypoint travel_to can't reliably reach (the J66
+            # trap: an asteroid base hundreds of units out, well past one tank's CRUISE).
+            try:
+                deliver_wp = ndv["destinationSymbol"]
+                fuel_cap = (await _ship(sym))["fuel"].get("capacity") or 400
+                dist = await T._distance(T._system_of(deliver_wp), buys[0], deliver_wp)
+                if dist > fuel_cap * 1.5:
+                    return (f"{n} done; declined {g} contract — delivery {deliver_wp} is "
+                            f"{dist:.0f}u from the source (> ~{fuel_cap} fuel range), unreachable")
+            except Exception:  # noqa: BLE001 — the guard must never crash the loop
+                pass
             cid = ct["id"]
             if not ct["accepted"]:
                 try:
