@@ -114,6 +114,30 @@ def _server_info(status: dict) -> dict:
     }
 
 
+_MAP_CACHE: dict = {}  # system -> waypoints (x,y,type,market); static within a reset
+
+
+async def _system_map(system: str) -> dict:
+    """The system's waypoints (position + type) for the star map, plus which markets
+    we've scouted (the price-map coverage). Waypoint geometry is static within a reset."""
+    if system in _MAP_CACHE:
+        wps = _MAP_CACHE[system]
+    else:
+        try:
+            raw = await C.call("GET", f"/systems/{system}/waypoints", params={"limit": 20})
+        except C.SpaceTradersError:
+            return {"system": system, "waypoints": []}
+        wps = [{"symbol": w["symbol"], "type": w.get("type", "?"),
+                "x": w.get("x", 0), "y": w.get("y", 0),
+                "market": any(t.get("symbol") == "MARKETPLACE" for t in w.get("traits", []))}
+               for w in (raw if isinstance(raw, list) else [])]
+        _MAP_CACHE[system] = wps
+    from . import prices
+    scouted = {m["waypointSymbol"] for m in prices.price_map(system)}
+    return {"system": system,
+            "waypoints": [{**w, "scouted": w["symbol"] in scouted} for w in wps]}
+
+
 def _contract_row(c: dict) -> dict:
     terms = c.get("terms", {})
     dv = (terms.get("deliver") or [{}])[0]
@@ -155,6 +179,7 @@ async def _snapshot() -> dict:
         "standing": _standing(status, agent["symbol"], agent["credits"]),
         "server": _server_info(status),
         "routes": learned[:6],  # trade routes the agent has learned (route memory)
+        "map": await _system_map("-".join(agent["headquarters"].split("-")[:2])),
         "contracts": [_contract_row(c) for c in contracts if not c.get("fulfilled")][:4],
         "autopilot": {
             "running": ops.get("running", False),
@@ -234,6 +259,21 @@ function eta(iso){ if(!iso) return ""; const ms=new Date(iso)-new Date(); if(ms<
 function dur(iso){ if(!iso) return "—"; const ms=new Date(iso)-new Date(); if(ms<=0) return "now";
   const s=Math.floor(ms/1000),d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
   return (d?d+"d ":"")+h+"h "+m+"m"; }
+function renderMap(d){
+  const wps=((d.map||{}).waypoints)||[];
+  if(!wps.length) return '<div class="sub">no map data yet</div>';
+  const xs=wps.map(w=>w.x),ys=wps.map(w=>w.y);
+  const minx=Math.min(...xs),maxx=Math.max(...xs),miny=Math.min(...ys),maxy=Math.max(...ys);
+  const W=860,H=300,pad=26;
+  const sx=v=>pad+(v-minx)/((maxx-minx)||1)*(W-2*pad);
+  const sy=v=>pad+(v-miny)/((maxy-miny)||1)*(H-2*pad);
+  const by={}; wps.forEach(w=>by[w.symbol]=w);
+  const col={PLANET:'#6db3f2',GAS_GIANT:'#46c46a',MOON:'#9aa0aa',ASTEROID:'#b08d57',ENGINEERED_ASTEROID:'#b08d57',ASTEROID_BASE:'#b08d57',ASTEROID_FIELD:'#b08d57',FUEL_STATION:'#e0a23c',JUMP_GATE:'#9b87f2',ORBITAL_STATION:'#9aa0aa'};
+  const lines=(d.routes||[]).map(r=>{const a=by[r.buy_at],b=by[r.sell_at];return (a&&b)?`<line x1="${sx(a.x)}" y1="${sy(a.y)}" x2="${sx(b.x)}" y2="${sy(b.y)}" stroke="#9b87f2" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>`:'';}).join('');
+  const dots=wps.map(w=>{const c=col[w.type]||'#9aa0aa',rad=(w.type==='PLANET'||w.type==='GAS_GIANT')?5:3;const ring=w.scouted?`<circle cx="${sx(w.x)}" cy="${sy(w.y)}" r="${rad+3}" fill="none" stroke="#46c46a" stroke-width="1" opacity="0.6"/>`:'';return `${ring}<circle cx="${sx(w.x)}" cy="${sy(w.y)}" r="${rad}" fill="${c}"><title>${w.symbol} · ${w.type}${w.market?' · market':''}${w.scouted?' · scouted':''}</title></circle>`;}).join('');
+  const ships=(d.ships||[]).map(s=>{const w=by[s.waypoint];if(!w)return'';const x=sx(w.x),y=sy(w.y);return `<rect x="${x-3.5}" y="${y-3.5}" width="7" height="7" fill="#fff" transform="rotate(45 ${x} ${y})"><title>${s.symbol} @ ${s.waypoint}</title></rect>`;}).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="background:#070b10;border:1px solid var(--line);border-radius:8px">${lines}${dots}${ships}</svg>`;
+}
 async function poll(){
   try{
     const h = TOKEN ? {Authorization:"Bearer "+TOKEN} : {};
@@ -291,6 +331,9 @@ function render(d){
       <div class="sub" style="margin-top:4px">${srv.frequency||'?'} reset${srv.next_reset?` · ${new Date(srv.next_reset).toLocaleString()}`:''}</div>
       <div class="sub" style="margin-top:6px">galaxy: ${(srv.agents||'?').toLocaleString?srv.agents.toLocaleString():srv.agents} agents · ${compact(srv.ships)} ships · ${compact(srv.systems)} systems</div></div>
   </div>
+  <div class="card" style="margin-top:14px"><h2>System map — ${(d.map||{}).system||''}
+    <span style="color:var(--mut);font-weight:400;text-transform:none">— ◆ ships · ◯ scouted markets · ┄ learned routes</span></h2>
+    ${renderMap(d)}</div>
   <div class="card" style="margin-top:14px"><h2>Fleet (${d.ships.length})</h2>
     <table><tr><th>Ship</th><th>Role</th><th>Status</th><th>Location</th><th>Headed</th><th>Fuel</th><th>Cargo</th></tr>
     ${ships}</table></div>

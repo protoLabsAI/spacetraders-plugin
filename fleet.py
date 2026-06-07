@@ -364,6 +364,9 @@ async def _mining_loop(sym: str, deadline: float, asteroid: str, market: str, *,
 _MIN_MARGIN = 30        # cr/unit floor for a trade route (fuel/time eats less than this)
 _BUY_BUFFER = 600_000   # only reinvest in a hauler when this comfortable (cost ~290k)
 _MAX_SHIPS = 8          # cap auto-bought fleet size
+_PROBE_BUFFER = 80_000  # probes ~23k + fly free — buy them cheap to scout
+_MAP_TARGET = 8         # markets to have in the price map before arbitrage surfaces
+_MAX_PROBES = 5         # enough parallel scouts
 _ROUTE_CACHE: dict = {"at": -1e9, "route": None}
 
 
@@ -424,6 +427,46 @@ async def _trade_loop(sym: str, deadline: float, system: str, market_wps: list, 
     return f"completed {runs} trade run(s)" if runs else "no profitable route this window — idled"
 
 
+async def _buy_ship_at_yard(ships: list, system: str, ship_type: str, *, log=None) -> bool:
+    """Ferry a free-flying probe to a shipyard and buy ``ship_type``. Best-effort."""
+    try:
+        yards = await C.call("GET", f"/systems/{system}/waypoints",
+                             params={"traits": "SHIPYARD", "limit": 20})
+    except C.SpaceTradersError:
+        return False
+    if not yards:
+        return False
+    yard = yards[0]["symbol"]
+    mover = next((s for s in ships if s["fuel"].get("capacity", 0) == 0), None) or (ships[0] if ships else None)
+    if mover is None or not await travel_to(mover["symbol"], yard, log=log):
+        return False
+    try:
+        r = await C.call("POST", "/my/ships", json={"shipType": ship_type, "waypointSymbol": yard})
+        if log:
+            log(f"reinvest: bought {r['ship']['symbol']} ({ship_type}) @ {yard}")
+        return True
+    except C.SpaceTradersError as e:
+        if log:
+            log(f"reinvest skipped ({ship_type}): {e}")
+        return False
+
+
+async def _maybe_reinvest(ships: list, system: str, *, log=None) -> None:
+    """Self-scaling reinvestment: fill the price map FIRST with cheap probes (parallel
+    scouting → arbitrage surfaces sooner), then scale trade with haulers once the map is
+    covered and capital is comfortable."""
+    if len(ships) >= _MAX_SHIPS:
+        return
+    from . import prices
+    coverage = prices.stats(system).get("markets", 0)
+    probes = sum(1 for s in ships if s["fuel"].get("capacity", 0) == 0)
+    if coverage < _MAP_TARGET and probes < _MAX_PROBES:
+        if await _credits() >= _PROBE_BUFFER:
+            await _buy_ship_at_yard(ships, system, "SHIP_PROBE", log=log)
+    elif await _credits() >= _BUY_BUFFER:
+        await _buy_ship_at_yard(ships, system, "SHIP_LIGHT_HAULER", log=log)
+
+
 async def _maybe_buy_hauler(ships: list, system: str, *, log=None) -> None:
     """Reinvest profit into a LIGHT_HAULER when capital is comfortable and there's
     room to grow. Best-effort: a probe (flies free) ferries to a shipyard to buy it;
@@ -479,7 +522,7 @@ async def autopilot(minutes: float, *, log=None) -> dict:
     #   • every OTHER cargo ship runs the best profitable TRADE route (the scaling
     #     lever — independent + spread-guarded; idles, never loses, if none yet).
     if system:
-        await _maybe_buy_hauler(ships, system, log=log)
+        await _maybe_reinvest(ships, system, log=log)   # probes to fill the map, then haulers
         ships = await C.call("GET", "/my/ships")   # refresh after a possible buy
     jobs = {}
     cargo_ships = [s for s in ships if s["cargo"]["capacity"] > 0]
