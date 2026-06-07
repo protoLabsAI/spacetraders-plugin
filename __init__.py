@@ -36,3 +36,21 @@ def register(registry) -> None:
     for cfg in space_subagents():
         registry.register_subagent(cfg)
     log.info("[spacetraders] registered crew subagents: navigator, trader, miner, fleet-commander")
+
+    # Fleet-engine lifecycle surface (ADR 0018) — the background autopilot starts
+    # on demand (st_fleet_start) as an asyncio task; register a surface so it's
+    # cleanly STOPPED on server shutdown/reload instead of orphaned mid-loop.
+    from . import fleet
+
+    async def _fleet_surface_start() -> None:
+        log.info("[spacetraders] fleet-engine surface ready (autopilot starts on demand)")
+
+    async def _fleet_surface_stop() -> None:
+        try:
+            fleet.stop_ops()
+            log.info("[spacetraders] fleet engine stopped cleanly on shutdown")
+        except Exception:  # noqa: BLE001 — shutdown must not raise
+            pass
+
+    registry.register_surface(_fleet_surface_start, stop=_fleet_surface_stop,
+                              name="spacetraders-fleet")
