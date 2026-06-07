@@ -47,8 +47,29 @@ async def _wait_cooldown(sym: str, poll: float = 5.0) -> None:
         await asyncio.sleep(min(cd + 1, poll if poll > cd else cd + 1))
 
 
+async def _refuel_if_low(sym: str, frac: float = 0.6, *, log=None) -> None:
+    """Top off a ship's fuel if it's below ``frac`` and the current waypoint sells
+    fuel. Keeps ships from trickling down to DRIFT-only — call on arrival anywhere."""
+    s = await _ship(sym)
+    fuel = s.get("fuel", {})
+    cap = fuel.get("capacity", 0)
+    if cap == 0 or fuel.get("current", 0) >= frac * cap:   # probe (0 fuel) or already full enough
+        return
+    wp = s["nav"]["waypointSymbol"]
+    try:
+        m = await C.call("GET", f"/systems/{T._system_of(wp)}/waypoints/{wp}/market")
+        if any(g.get("symbol") == "FUEL" for g in m.get("tradeGoods", [])):
+            await C.call("POST", f"/my/ships/{sym}/dock")
+            r = await C.call("POST", f"/my/ships/{sym}/refuel")
+            if log:
+                log(f"{sym}: refueled → {r['fuel']['current']}/{r['fuel']['capacity']}")
+    except C.SpaceTradersError:
+        pass
+
+
 async def travel_to(sym: str, dest: str, *, max_hops: int = 12, log=None) -> bool:
-    """Get a ship parked at ``dest``, looping st_travel through any fuel stops.
+    """Get a ship parked at ``dest``, looping st_travel through any fuel stops, and
+    top off fuel on arrival wherever it's sold.
 
     st_travel issues one hop (CRUISE / DRIFT / fuel-station detour); we wait out
     each leg and call again until the ship is actually at the destination.
@@ -57,6 +78,7 @@ async def travel_to(sym: str, dest: str, *, max_hops: int = 12, log=None) -> boo
         s = await _ship(sym)
         nav = s["nav"]
         if nav["status"] != "IN_TRANSIT" and nav["waypointSymbol"] == dest:
+            await _refuel_if_low(sym, log=log)   # arrived — top off if fuel is sold here
             return True
         if nav["status"] == "IN_TRANSIT":
             await _wait_arrival(sym)
