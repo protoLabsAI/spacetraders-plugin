@@ -21,6 +21,34 @@ from . import client as C
 _CACHE: dict = {"at": -999.0, "data": None}
 _TTL = 8.0  # seconds — cap how often the dashboard hits the live API
 
+# Prometheus gauges so /metrics can alert on a stalled or money-losing fleet
+# (T3.1). Best-effort: no-op if prometheus_client isn't installed. Same AGENT_NAME
+# prefix as the substrate metrics so they group on /metrics.
+try:
+    import os
+    import re as _re
+
+    from prometheus_client import Gauge
+
+    _p = _re.sub(r"[^a-z0-9]+", "_", os.environ.get("AGENT_NAME", "protoagent").lower()).strip("_") or "protoagent"
+    _G_CREDITS = Gauge(f"{_p}_spacetraders_credits", "SpaceTraders agent credits (live)")
+    _G_CRHR = Gauge(f"{_p}_spacetraders_credits_per_hour", "SpaceTraders last autopilot run cr/hr")
+    _G_SHIPS = Gauge(f"{_p}_spacetraders_ships", "SpaceTraders fleet size")
+except Exception:  # noqa: BLE001
+    _G_CREDITS = _G_CRHR = _G_SHIPS = None
+
+
+def _emit_metrics(agent: dict, last: dict) -> None:
+    if _G_CREDITS is None:
+        return
+    try:
+        _G_CREDITS.set(agent.get("credits", 0))
+        _G_SHIPS.set(agent.get("ships", 0) or 0)
+        if last.get("per_hour") is not None:
+            _G_CRHR.set(last["per_hour"])
+    except Exception:  # noqa: BLE001 — metrics must never break the dashboard
+        pass
+
 
 def _ship_row(s: dict) -> dict:
     nav = s.get("nav", {})
@@ -81,6 +109,7 @@ async def _snapshot() -> dict:
             "last_gained": last.get("gained"),
         },
     }
+    _emit_metrics(data["agent"], last)
     _CACHE.update(at=now, data=data)
     return data
 

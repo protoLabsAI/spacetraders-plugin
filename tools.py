@@ -20,6 +20,9 @@ from .client import SpaceTradersError, call, save_token
 # expire server-side (a few minutes); we filter expired ones lazily on use.
 _SURVEYS: dict[str, list[dict]] = {}
 
+# Ship purchases above this (credits) pause for operator approval (HITL gate).
+_BUY_APPROVAL_THRESHOLD = 100_000
+
 # Waypoint coordinates, cached per session (static within a reset).
 _COORDS: dict[str, tuple] = {}
 
@@ -468,6 +471,28 @@ async def st_buy_ship(waypoint: str, ship_type: str) -> str:
         waypoint: the SHIPYARD waypoint symbol.
         ship_type: the ship type to buy, e.g. "SHIP_MINING_DRONE".
     """
+    # HITL gate: a high-value purchase pauses for operator approval (LangGraph
+    # interrupt → A2A input-required → resume). The operator's fleet spend over a
+    # threshold is genuinely their call, not the agent's.
+    system = _system_of(waypoint)
+    price = None
+    try:
+        sy = await call("GET", f"/systems/{system}/waypoints/{waypoint}/shipyard")
+        price = next((sh["purchasePrice"] for sh in sy.get("ships", [])
+                      if sh.get("type") == ship_type.upper()), None)
+    except SpaceTradersError:
+        pass  # price unknown → buy without the gate (the API still enforces credits)
+    if price is not None and price > _BUY_APPROVAL_THRESHOLD:
+        from langgraph.types import interrupt
+        decision = interrupt({
+            "kind": "approval",
+            "title": "Approve high-value ship purchase?",
+            "message": f"Buy {ship_type.upper()} at {waypoint} for {price:,} cr? "
+                       f"Reply 'approve' to proceed or 'deny' to cancel.",
+            "amount": price,
+        })
+        if str(decision).strip().lower() not in ("approve", "approved", "yes", "y", "ok", "true"):
+            return f"Purchase of {ship_type.upper()} ({price:,} cr) cancelled — operator did not approve."
     try:
         d = await call("POST", "/my/ships",
                        json={"shipType": ship_type.upper(), "waypointSymbol": waypoint})
@@ -845,7 +870,14 @@ def _harden(tools: list) -> list:
                 return await fn(**kwargs)
             except SpaceTradersError as e:
                 return f"Error: {e}"
-            except Exception as e:  # noqa: BLE001 — never let a tool sink the turn
+            except BaseException as e:  # noqa: BLE001
+                # NEVER swallow LangGraph control flow (interrupt/resume for HITL,
+                # GraphBubbleUp) — re-raise so a tool can pause the turn for an
+                # operator approval. Only game/runtime errors become strings.
+                if type(e).__module__.split(".")[0] == "langgraph":
+                    raise
+                if not isinstance(e, Exception):
+                    raise
                 return f"Error: unexpected {type(e).__name__}: {e}"
         return _safe
     for t in tools:
