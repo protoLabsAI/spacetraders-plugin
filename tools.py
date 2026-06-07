@@ -903,6 +903,68 @@ async def st_fulfill_contract(contract_id: str) -> str:
     return f"✦ Contract {contract_id} FULFILLED. Credits now {ag.get('credits', '?'):,}."
 
 
+_DOCS_SPEC: dict | None = None
+
+
+async def _load_spec() -> dict:
+    """Fetch + cache the official SpaceTraders OpenAPI spec (the authoritative reference)."""
+    global _DOCS_SPEC
+    if _DOCS_SPEC is not None:
+        return _DOCS_SPEC
+    import httpx
+    urls = [
+        "https://stoplight.io/api/v1/projects/spacetraders/spacetraders/nodes/reference/SpaceTraders.json",
+        "https://raw.githubusercontent.com/SpaceTradersAPI/api-docs/main/reference/SpaceTraders.json",
+    ]
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+        for u in urls:
+            try:
+                d = (await c.get(u)).json()
+                if isinstance(d, dict) and "paths" in d:
+                    _DOCS_SPEC = d
+                    return d
+            except Exception:  # noqa: BLE001
+                continue
+    _DOCS_SPEC = {}
+    return _DOCS_SPEC
+
+
+@tool
+async def st_docs(query: str) -> str:
+    """Look up the OFFICIAL SpaceTraders reference (the OpenAPI spec) for a topic — API
+    endpoints, data schemas, and enums (flight modes, ship types, factions) with their
+    descriptions. Ground gameplay decisions in the real rules instead of guessing — e.g.
+    "flight mode" → CRUISE/DRIFT/BURN tradeoffs, "ship type" → the buyable ships, "contract"
+    → contract structure. Reliable + structured; reach for web_search only for prose/meta.
+
+    Args:
+        query: a topic — e.g. "flight mode", "ship type", "fuel", "contract", "refuel".
+    """
+    spec = await _load_spec()
+    if not spec:
+        return "SpaceTraders reference unavailable (couldn't fetch the spec) — fall back to web_search."
+    q = query.lower().strip()
+    hits: list[str] = []
+    for path, methods in (spec.get("paths") or {}).items():
+        for verb, op in (methods or {}).items():
+            if not isinstance(op, dict):
+                continue
+            if q in f"{path} {op.get('summary', '')} {op.get('description', '')}".lower():
+                hits.append(f"  {verb.upper()} {path} — {op.get('summary', '') or '(endpoint)'}")
+    for name, sc in ((spec.get("components") or {}).get("schemas") or {}).items():
+        if not isinstance(sc, dict):
+            continue
+        desc, enum = sc.get("description") or "", sc.get("enum")
+        qz = q.replace(" ", "")  # so "flight mode" matches the "ShipNavFlightMode" schema
+        if q in name.lower() or qz in name.lower() or q in desc.lower() or (enum and q in str(enum).lower()):
+            line = f"  [schema] {name}: {desc[:140]}".rstrip()
+            hits.append(line + (f" — values: {enum}" if enum else ""))
+    if not hits:
+        return (f"No SpaceTraders reference matched '{query}'. Try: flight mode, ship type, "
+                f"fuel, cargo, contract, market, navigate, refuel, faction, jump gate.")
+    return f"SpaceTraders reference — '{query}' ({len(hits)} hit(s)):\n" + "\n".join(hits[:18])
+
+
 def _harden(tools: list) -> list:
     """Belt-and-suspenders: a tool that raises crashes the agent's whole turn, so
     wrap every coroutine to turn ANY error into a readable 'Error: ...' string the
@@ -939,4 +1001,5 @@ def get_spacetraders_tools() -> list:
         st_survey, st_extract, st_jettison, st_purchase, st_sell,
         st_contracts, st_accept_contract, st_negotiate_contract,
         st_deliver, st_fulfill_contract,
+        st_docs,
     ])

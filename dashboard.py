@@ -126,14 +126,25 @@ async def _system_map(system: str) -> dict:
     if system in _MAP_CACHE:
         wps = _MAP_CACHE[system]
     else:
+        raw: list = []
         try:
-            raw = await C.call("GET", f"/systems/{system}/waypoints", params={"limit": 20})
+            page = 1
+            while page <= 12:  # paginate the FULL system — far outposts (asteroid bases,
+                batch = await C.call("GET", f"/systems/{system}/waypoints",  # jump gates) live
+                                     params={"limit": 20, "page": page})     # on later pages
+                if not batch:
+                    break
+                raw.extend(batch)
+                if len(batch) < 20:
+                    break
+                page += 1
         except C.SpaceTradersError:
-            return {"system": system, "waypoints": []}
+            if not raw:
+                return {"system": system, "waypoints": []}
         wps = [{"symbol": w["symbol"], "type": w.get("type", "?"),
                 "x": w.get("x", 0), "y": w.get("y", 0),
                 "market": any(t.get("symbol") == "MARKETPLACE" for t in w.get("traits", []))}
-               for w in (raw if isinstance(raw, list) else [])]
+               for w in raw]
         _MAP_CACHE[system] = wps
     from . import prices
     pm = {m["waypointSymbol"]: m["tradeGoods"] for m in prices.price_map(system)}
@@ -253,6 +264,34 @@ _PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Fleet</title
 let TOKEN = null;
 let MAPCARDS = {};
 let LAST_D = null;  // last polled state — the 1s ticker re-renders the map so in-transit ships glide
+// System-map pan/zoom — the full system spans far outposts, so let the operator explore.
+let MAP_VIEW = {s:1, tx:0, ty:0};
+function applyMapView(){
+  const g = document.getElementById("mapworld");
+  if(g) g.setAttribute("transform", `translate(${MAP_VIEW.tx},${MAP_VIEW.ty}) scale(${MAP_VIEW.s})`);
+}
+document.addEventListener("wheel", e=>{
+  const svg = e.target.closest && e.target.closest("#mapsvg"); if(!svg) return;
+  e.preventDefault();
+  const r = svg.getBoundingClientRect();
+  const cx = (e.clientX-r.left)/r.width*860, cy = (e.clientY-r.top)/r.height*300;  // viewBox space (860x300)
+  const ns = Math.max(0.5, Math.min(40, MAP_VIEW.s * (e.deltaY<0 ? 1.15 : 1/1.15)));
+  const k = ns/MAP_VIEW.s;
+  MAP_VIEW.tx = cx-(cx-MAP_VIEW.tx)*k; MAP_VIEW.ty = cy-(cy-MAP_VIEW.ty)*k; MAP_VIEW.s = ns;
+  applyMapView();
+}, {passive:false});
+let _mapDrag = null;
+document.addEventListener("mousedown", e=>{
+  const svg = e.target.closest && e.target.closest("#mapsvg");
+  if(svg) _mapDrag = {x:e.clientX, y:e.clientY, tx:MAP_VIEW.tx, ty:MAP_VIEW.ty, w:svg.getBoundingClientRect().width};
+});
+document.addEventListener("mousemove", e=>{
+  if(!_mapDrag) return;
+  const f = 860/_mapDrag.w;  // px → viewBox units
+  MAP_VIEW.tx = _mapDrag.tx+(e.clientX-_mapDrag.x)*f; MAP_VIEW.ty = _mapDrag.ty+(e.clientY-_mapDrag.y)*f;
+  applyMapView();
+});
+document.addEventListener("mouseup", ()=>{ _mapDrag = null; });
 // Hover detail card for the system map — populated per-element by renderMap.
 const _mc = document.createElement("div"); _mc.id = "mapcard";
 _mc.style.cssText = "position:fixed;display:none;z-index:60;background:var(--card);border:1px solid var(--line);"
@@ -317,7 +356,9 @@ function renderMap(d){
     } else { const w=by[s.waypoint]; if(!w) return ''; x=sx(w.x); y=sy(w.y); }
     MAPCARDS['s:'+s.symbol]=`<b style="color:#fff">${esc(s.symbol)}</b> · ${esc(s.status)}<br><span class="sub">@ ${esc(s.waypoint)} · ${esc(s.role)} · cargo ${esc(s.cargo)}${s.dest?' · → '+esc(s.dest)+extra:''}</span>`;
     return `<rect x="${x-3.5}" y="${y-3.5}" width="7" height="7" fill="#fff" transform="rotate(45 ${x} ${y})" data-k="s:${s.symbol}" style="cursor:pointer"/>`;}).join('');
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="background:#070b10;border:1px solid var(--line);border-radius:8px">${lines}${paths}${dots}${ships}</svg>`;
+  return `<svg id="mapsvg" viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="background:#070b10;border:1px solid var(--line);border-radius:8px;cursor:grab;touch-action:none">`
+    + `<g id="mapworld" transform="translate(${MAP_VIEW.tx},${MAP_VIEW.ty}) scale(${MAP_VIEW.s})">${lines}${paths}${dots}${ships}</g></svg>`
+    + `<div class="sub" style="margin-top:4px">scroll to zoom · drag to pan · <a href="#" onclick="MAP_VIEW={s:1,tx:0,ty:0};applyMapView();return false" style="color:var(--acc)">reset view</a></div>`;
 }
 async function poll(){
   try{

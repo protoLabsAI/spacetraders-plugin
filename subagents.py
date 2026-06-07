@@ -163,6 +163,7 @@ _STRATEGIST_TOOLS = [
     "st_agent", "st_fleet", "st_ship", "st_autopilot_status", "st_knobs",
     "st_contracts", "st_trade_routes", "st_find_market", "st_market", "st_waypoints", "st_shipyard",
     # RESEARCH + KNOWLEDGE — the self-improvement substrate
+    "st_docs",  # official SpaceTraders reference (OpenAPI spec) — rules/schemas/enums
     "web_search", "fetch_url", "memory_recall", "memory_list", "memory_ingest", "current_time",
     # ACT — self-heal + tune + reserve-protected FLEET GROWTH (the one allowed spend)
     "st_autopilot_start", "st_autopilot_stop", "st_tune", "st_buy_ship",
