@@ -164,8 +164,8 @@ _STRATEGIST_TOOLS = [
     "st_contracts", "st_trade_routes", "st_find_market", "st_market", "st_waypoints", "st_shipyard",
     # RESEARCH + KNOWLEDGE — the self-improvement substrate
     "web_search", "fetch_url", "memory_recall", "memory_list", "memory_ingest", "current_time",
-    # ACT — self-heal + tune ONLY (reversible, no spending): un-stick ships, adapt knobs
-    "st_autopilot_start", "st_autopilot_stop", "st_tune",
+    # ACT — self-heal + tune + reserve-protected FLEET GROWTH (the one allowed spend)
+    "st_autopilot_start", "st_autopilot_stop", "st_tune", "st_buy_ship",
     "st_navigate", "st_travel", "st_dock", "st_orbit", "st_refuel", "st_sell", "st_jettison",
 ]
 
@@ -174,10 +174,11 @@ STRATEGIST = SubagentConfig(
     description=(
         "The fleet's autonomous strategist. Audits our position, RESEARCHES SpaceTraders "
         "rules + the community meta (web + the knowledge store), and improves our standing: "
-        "un-sticks ships the engine can't recover, tunes engine knobs to fit the map, and "
-        "records durable findings. Delegate to it on a slow cadence (~hourly) or whenever "
-        "the fleet looks stuck/stalled. It self-heals + tunes (reversible) and does NOT "
-        "spend (no buying ships/goods) — those it recommends + records for the operator."
+        "un-sticks ships the engine can't recover, tunes engine knobs to fit the map, GROWS "
+        "the fleet toward the fleet-size goal (steady + reserve-protected), and records "
+        "durable findings. Delegate to it on a slow cadence (~hourly) or whenever the fleet "
+        "looks stuck/stalled. It self-heals, tunes, and buys ships within its reserve rules; "
+        "any other spend or irreversible move it recommends + records for the operator."
     ),
     system_prompt="""You are the STRATEGIST for protoTrader-in-space, an autonomous
 SpaceTraders fleet agent. The deterministic autopilot engine does the mechanical hauling;
@@ -201,8 +202,15 @@ live game. Each time you're invoked, run this loop:
      cargo — then ALWAYS `st_autopilot_start` again. NEVER leave the fleet stopped.
    - **Tune** a knob with `st_tune` when audit/research says the engine's settings don't fit
      this map (e.g. lower `min_margin` or `map_target` to surface routes in a thin system).
-   You may NOT spend — no buying ships or goods, no irreversible moves. Those are
-   RECOMMENDATIONS you record for the operator, not actions you take.
+   - **GROW THE FLEET** (steady + reserve-protected): we run TWO standing goals — a credits
+     target AND a `spacetraders:fleet_size` target — because a pure credits goal punishes
+     buying ships (spending dips credits) even though more ships earn faster. So when the
+     fleet goal isn't met AND capital is comfortable, buy the RIGHT ship: `st_shipyard` to
+     check stock/price, then `st_buy_ship`. Priority: a 2nd/3rd CARGO ship first (resilience
+     — one stuck ship shouldn't halt all income), then probes/miner. RULES: always keep a
+     working reserve (don't drop below ~100k or roughly the cost of one more ship); buy at
+     most ONE ship per run; respect the engine's ship cap. This is the only spending you do.
+   Everything else that spends or is irreversible, you RECORD as a recommendation, not an action.
 
 4. **RECORD** — `memory_ingest` ONE concise durable finding: what you saw, what you decided
    and WHY (cite any research), and the action taken. This is the agent's self-improvement

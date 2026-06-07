@@ -74,3 +74,30 @@ lessons each cycle.
 > (they're the agent's memory); the in-game agent/ships/token don't. After a wipe, just
 > run `fresh_start.py` again — it re-registers, re-seeds, and the engine recalls what it
 > learned last cycle. Nothing per-reset is hard-coded.
+
+## Intentionally NOT min-maxed — room to make it yours
+
+This plugin is a **demonstration of the substrate's capabilities** — an autonomous,
+research-driven, self-improving agent that goes from a fresh start to a growing treasury —
+**not a min-maxed, leaderboard-optimal bot.** That's deliberate. The engine plays a sound,
+loss-guarded baseline and stops there, leaving the interesting decisions — and the headroom —
+to **you and your strategies.**
+
+What's left as **room to explore** (and how the pieces invite it):
+
+- **Multiple goals, not one number.** It runs a `spacetraders:credits` target *and* a
+  `spacetraders:fleet_size` target as parallel **monitor goals** — because optimizing one
+  metric alone creates blind spots (a pure credits goal under-invests in ships). Add your
+  own goals (reputation, a jump gate, a system to dominate) with a plugin verifier.
+- **A `strategist` subagent that *researches and decides*.** It audits, reads the meta
+  (`web_search` + the knowledge store), and acts within bounded authority (self-heal, tune,
+  steady fleet growth). **Widen its mandate, sharpen its strategy, or replace it** — it's
+  where your edge goes.
+- **Tunable engine knobs** (`st_tune`) and a deliberately **conservative** posture
+  (declines slow far-hauls, modest reserves, simple route math). Crank the aggression,
+  expand into the outer system, specialize ships — the levers are exposed on purpose.
+- **It learns + remembers** (knowledge store), so whatever strategy you layer on compounds
+  across windows and survives the wipe.
+
+In short: it gets the fleet *going and growing* on its own, and gets out of your way so the
+**optimization, specialization, and clever plays are yours to add.**

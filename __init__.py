@@ -48,6 +48,24 @@ def register(registry) -> None:
         registry.register_goal_verifier("spacetraders:credits", _verify_credits)
         log.info("[spacetraders] registered goal verifier spacetraders:credits")
 
+        async def _verify_fleet_size(spec, ctx):
+            # A SECOND objective alongside credits — because a pure 'reach N credits' goal
+            # punishes buying ships (spending dips credits), so the agent under-invests in
+            # its own fleet. A standalone fleet-size monitor goal makes growth explicit.
+            from graph.goals.types import VerifyResult
+
+            from .client import call
+            try:
+                ships = await call("GET", "/my/ships", params={"limit": 20})
+                have = len(ships)
+            except Exception as e:  # noqa: BLE001
+                return VerifyResult(False, f"could not read fleet: {e}", "")
+            want = int((spec.get("args") or {}).get("min", 0))
+            return VerifyResult(have >= want, f"fleet {have} / {want} ships", str(have))
+
+        registry.register_goal_verifier("spacetraders:fleet_size", _verify_fleet_size)
+        log.info("[spacetraders] registered goal verifier spacetraders:fleet_size")
+
     # Goal hook (ADR 0028, PR3) — when the operator's substrate goal is achieved, wind
     # down the self-perpetuating engine. This is why WHEN to stop isn't hardcoded in the
     # engine: the target lives in the goal system (any spacetraders:credits value), and
