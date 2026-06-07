@@ -199,13 +199,21 @@ async def job_contract(sym: str, contract_id: str, *, log=None) -> str:
         done = dv["unitsFulfilled"]
         if done >= req or ct["fulfilled"]:
             break
-        await travel_to(sym, buy_wp, log=log)
-        await _dump_except(sym, good, log=log)
-        await _buy(sym, good, min(req - done, cap), max_price=pay_per_unit, log=log)
-        if await _held(sym, good) == 0:
-            return (f"skipped {good} contract at {done}/{req}: buy price exceeds the "
-                    f"{pay_per_unit:.0f}/unit the contract pays (would lose money)")
-        await travel_to(sym, deliver_wp, log=log)
+        # Buy: only purchase if we're actually AT the buy market (else we'd loop on a
+        # bad-state error). If already holding enough of the good, skip the buy leg.
+        if await _held(sym, good) < min(req - done, cap):
+            if not await travel_to(sym, buy_wp, log=log):
+                return f"could not reach buy market {buy_wp} for {good} (stuck at {done}/{req})"
+            await _dump_except(sym, good, log=log)
+            await _buy(sym, good, min(req - done, cap), max_price=pay_per_unit, log=log)
+            if await _held(sym, good) == 0:
+                return (f"skipped {good} contract at {done}/{req}: buy price exceeds the "
+                        f"{pay_per_unit:.0f}/unit the contract pays (would lose money)")
+        # Deliver: NEVER dock+deliver unless we actually reached the destination —
+        # otherwise the API rejects it ([4510] not at delivery waypoint) and the loop
+        # spins on the error (the recurring K93→J66 stall).
+        if not await travel_to(sym, deliver_wp, log=log):
+            return f"could not reach delivery waypoint {deliver_wp} (stuck at {done}/{req}, holding {good})"
         await C.call("POST", f"/my/ships/{sym}/dock")
         u = await _held(sym, good)
         await C.call("POST", f"/my/contracts/{contract_id}/deliver",
