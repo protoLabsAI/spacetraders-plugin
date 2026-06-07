@@ -15,13 +15,17 @@ from __future__ import annotations
 
 from graph.subagents.config import SubagentConfig
 
-_NAV_TOOLS = ["st_ship", "st_fleet", "st_waypoints", "st_route", "st_travel",
-              "st_navigate", "st_orbit", "st_dock", "st_refuel"]
-_TRADE_TOOLS = ["st_ship", "st_find_market", "st_market", "st_trade_routes",
+# Every specialist gets read-only st_fleet_status so a delegated tick can CHECK
+# whether the background autopilot is running and report up — engine start/stop
+# (st_fleet_start/stop) stays a lead/commander job, so a specialist never tries a
+# tool it doesn't have.
+_NAV_TOOLS = ["st_ship", "st_fleet", "st_fleet_status", "st_waypoints", "st_route",
+              "st_travel", "st_navigate", "st_orbit", "st_dock", "st_refuel"]
+_TRADE_TOOLS = ["st_ship", "st_fleet_status", "st_find_market", "st_market", "st_trade_routes",
                 "st_purchase", "st_sell", "st_transfer", "st_shipyard", "st_buy_ship",
                 "st_contracts", "st_accept_contract", "st_negotiate_contract",
                 "st_deliver", "st_fulfill_contract"]
-_MINE_TOOLS = ["st_ship", "st_orbit", "st_survey", "st_extract", "st_jettison"]
+_MINE_TOOLS = ["st_ship", "st_fleet_status", "st_orbit", "st_survey", "st_extract", "st_jettison"]
 
 NAVIGATOR = SubagentConfig(
     name="navigator",
@@ -74,6 +78,10 @@ For an acquisition or a procurement contract:
 3. Buy/sell with real numbers. Don't overbuy past cargo capacity. After delivering
    all required units, `st_fulfill_contract` to collect the on-fulfilled payout —
    that payment, not the advance, is the prize.
+
+The background autopilot is the commander's engine: call `st_fleet_status` to check
+whether it's running, but starting/stopping it isn't your job — if it needs a
+restart, say so and report up. Stay in your lane (markets + contracts).
 
 Report: what you bought/sold/delivered, the prices, the new credit balance, and the
 contract progress (X/Y delivered). Honest numbers only — no fabricated fills.""",
