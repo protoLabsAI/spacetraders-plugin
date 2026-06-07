@@ -306,35 +306,42 @@ async def _contract_loop(sym: str, deadline: float, claimed: set, lock, *, log=N
     while _now() < deadline:
         async with lock:
             cs = await C.call("GET", "/my/contracts")
-            cid = next((c["id"] for c in cs
-                        if c["accepted"] and not c["fulfilled"] and c["id"] not in claimed), None)
-            if not cid:
+            # Prefer an accepted, unfulfilled contract; else pick up an OFFERED one — a
+            # fresh agent STARTS with an offered contract, and the API refuses to
+            # negotiate a new one (4511) while an offer is pending, so we must ACCEPT the
+            # offer, not negotiate around it (the bug that parked the starter contract).
+            ct = (next((c for c in cs if c["accepted"] and not c["fulfilled"]
+                        and c["id"] not in claimed), None)
+                  or next((c for c in cs if not c["accepted"] and not c["fulfilled"]
+                           and c["id"] not in claimed), None))
+            if ct is None:
                 try:
-                    # You negotiate a fresh contract only while DOCKED at a faction
-                    # waypoint — travel to HQ and dock first, or it errors "not docked".
+                    # Negotiate only while DOCKED at a faction waypoint — travel to HQ
+                    # and dock first, or it errors "not docked".
                     if hq:
                         await travel_to(sym, hq, log=log)
                         try:
                             await C.call("POST", f"/my/ships/{sym}/dock")
                         except C.SpaceTradersError:
                             pass
-                    d = await C.call("POST", f"/my/ships/{sym}/negotiate/contract")
-                    new_ct = d["contract"]
-                    # Sourceability guard: do NOT accept a contract whose good no
-                    # market in-system sells — it's un-fulfillable (a MACHINERY-style
-                    # dead-end), and SpaceTraders won't let you cancel an accepted
-                    # contract, so it would block this ship until it expires. Decline
-                    # by not accepting; the ship parks this window and retries later.
-                    ndv = new_ct["terms"]["deliver"][0]
-                    g = ndv["tradeSymbol"]
-                    buys, _ = await T._good_markets(T._system_of(ndv["destinationSymbol"]), g)
-                    if not buys:
-                        return (f"{n} done; declined an un-sourceable {g} contract "
-                                f"(no market sells it in-system) — parking, not hauling dead weight")
-                    cid = new_ct["id"]
-                    await C.call("POST", f"/my/contracts/{cid}/accept")
+                    ct = (await C.call("POST", f"/my/ships/{sym}/negotiate/contract"))["contract"]
                 except C.SpaceTradersError as e:
                     return f"{n} contract(s) done; no more available ({e})"
+            # Sourceability guard (offered + negotiated alike): don't accept a contract
+            # whose good no market in-system sells — it's un-fulfillable, and an accepted
+            # contract can't be cancelled, so it would block this ship until it expires.
+            ndv = ct["terms"]["deliver"][0]
+            g = ndv["tradeSymbol"]
+            buys, _ = await T._good_markets(T._system_of(ndv["destinationSymbol"]), g)
+            if not buys:
+                return (f"{n} done; declined an un-sourceable {g} contract "
+                        f"(no market sells it in-system) — parking, not hauling dead weight")
+            cid = ct["id"]
+            if not ct["accepted"]:
+                try:
+                    await C.call("POST", f"/my/contracts/{cid}/accept")
+                except C.SpaceTradersError as e:
+                    return f"{n} contract(s) done; couldn't accept {g} contract ({e})"
             claimed.add(cid)
         if log:
             log(f"{sym}: working contract {cid}")
