@@ -1,21 +1,22 @@
 # SpaceTraders — a protoAgent full-bundle plugin 🛰️
 
-Turn any [protoAgent](https://github.com/protoLabsAI/protoAgent) into an autonomous
-**SpaceTraders** fleet commander. Play the live [SpaceTraders v2 API](https://spacetraders.io)
-— a persistent, shared galactic economy — to grow your operator's treasury through
-contracts, trade, and mining.
+Turn any [protoAgent](https://github.com/protoLabsAI/protoAgent) into an autonomous,
+**self-improving SpaceTraders fleet commander**. Play the live
+[SpaceTraders v2 API](https://spacetraders.io) — a persistent, shared galactic economy —
+and grow your operator's treasury from a fresh start toward **1,000,000 credits**,
+hands-off: contracts seed it, trade compounds it, scouting informs it, guards protect it.
 
 This is a **full-bundle plugin** (ADR 0027): one directory contributes the whole
 extension set, all auto-discovered.
 
 | Contribution | What |
 |---|---|
-| **Tools** (30) | register, agent/fleet status, fuel-aware `st_travel`, markets, contracts, mining, buy/sell, shipyard, and the background autopilot (`st_autopilot_start`/`stop`/`status`) |
+| **Tools** (31) | register, agent/fleet status, fuel-aware `st_travel`, markets, `st_trade_routes`, contracts, mining, buy/sell, shipyard, and the background **growth engine** (`st_autopilot_start`/`stop`/`status`) |
 | **Subagents** (4) | `navigator`, `trader`, `miner`, `fleet-commander` |
 | **Workflows** | `procurement-run`, `mining-run`, `fleet-bootstrap` (`workflows/`) |
 | **Skills** | `play-spacetraders`, `run-a-procurement-contract`, `maximize-credits-per-hour` (`skills/`) |
-| **Console view** (ADR 0026) | a **Fleet** rail dashboard — live credits, ships, contracts, autopilot |
-| **Knowledge** | `LESSONS.md` + `seed_kb.py` — durable game-mechanic lessons the agent recalls |
+| **Console view** (ADR 0026) | a **Fleet** rail dashboard — credits, ships + live ETAs, contracts, autopilot, the **galaxy leaderboard standing**, the **wipe countdown**, and the agent's **learned routes** |
+| **Knowledge** | `LESSONS.md` + `seed_kb.py` (durable lessons) + **trade-route memory** (`routes.py` — the engine learns + recalls profitable routes across windows and wipes) |
 
 ## Install
 
@@ -38,16 +39,33 @@ Python over `httpx` (a core dep) — no extra `pip install`.
    (or the account token + call sign to register a new agent).
 3. *(Optional)* seed the durable lessons so the agent recalls them:
    `PYTHONPATH=. python plugins/spacetraders/seed_kb.py`
-4. Tell the agent: *"grow the treasury"* — it sets a goal, runs the fleet engine in
-   the background, and supervises. Watch it on the **Fleet** dashboard.
+4. Tell the agent: *"grow the treasury"* — it runs the growth engine in the
+   background and supervises. Watch it on the **Fleet** dashboard.
 
-## How it plays (the loop)
+**One-command fresh start / post-wipe recovery** — register → seed → kick the engine:
 
-Operator sets a **goal** → the agent plans (beads) → launches the **background
-engine** (one shared rate budget; cargo ship works contracts, probes scout) →
-**records findings + recalls lessons** → a **scheduler tick** keeps it going. Simple
-and diversified by default (contracts + scouts — no min-maxing; over-mining crashes
-prices). Expand into multi-ship trade/mining when ready.
+```sh
+PYTHONPATH=. python plugins/spacetraders/fresh_start.py <CALLSIGN> [FACTION]
+```
 
-> The universe **resets every few weeks** — re-register, re-seed `LESSONS.md`, and
-> re-scan live state after a wipe. Nothing per-reset is hard-coded.
+## How it plays — the zero-to-million growth engine
+
+The background **growth engine** (`st_autopilot_start`, one shared rate budget) runs the
+fleet by role, all guarded against loss:
+
+- **probes SCOUT** markets (free) → build the price map trade needs;
+- **one cargo ship works CONTRACTS** — the capital base (contracts are capped at one
+  active per agent, so they seed, they don't scale);
+- **every other cargo ship runs the best profitable TRADE route** — the scaling lever,
+  each independent + spread-guarded, **re-evaluated as markets saturate**;
+- profit is **reinvested into haulers** once capital is comfortable.
+
+It **learns**: each discovered route is remembered in the knowledge store and recalled
+before re-scanning, so every window — and every fresh start — is smarter than the last.
+A **scheduler tick** keeps it going hands-off; the agent records findings + recalls
+lessons each cycle.
+
+> The universe **resets every few weeks** — durable lessons + learned routes survive
+> (they're the agent's memory); the in-game agent/ships/token don't. After a wipe, just
+> run `fresh_start.py` again — it re-registers, re-seeds, and the engine recalls what it
+> learned last cycle. Nothing per-reset is hard-coded.

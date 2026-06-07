@@ -145,6 +145,8 @@ async def _snapshot() -> dict:
     ops = fleet.ops_status()
     last = ops.get("result") or {}
     status = await _server_status()
+    from . import routes as _routes
+    learned = _routes.recall_routes("-".join(agent["headquarters"].split("-")[:2]))
     data = {
         "agent": {"symbol": agent["symbol"], "credits": agent["credits"],
                   "hq": agent["headquarters"], "faction": agent.get("startingFaction"),
@@ -152,6 +154,7 @@ async def _snapshot() -> dict:
         "ships": [_ship_row(s) for s in ships],
         "standing": _standing(status, agent["symbol"], agent["credits"]),
         "server": _server_info(status),
+        "routes": learned[:6],  # trade routes the agent has learned (route memory)
         "contracts": [_contract_row(c) for c in contracts if not c.get("fulfilled")][:4],
         "autopilot": {
             "running": ops.get("running", False),
@@ -261,6 +264,10 @@ function render(d){
     <td style="text-align:right">${compact(x.credits)}</td></tr>`).join("");
   const youLine=`You — <b>${a.symbol}</b>: ${cr(a.credits)} · `+(lb.rank?`ranked #${lb.rank}`:"unranked")
     +(lb.cutoff?` · top ${lb.board_size} needs ${compact(lb.cutoff)}`:"");
+  const rts=(d.routes||[]);
+  const routesRows=rts.length?rts.map(r=>`<tr><td>${r.good}</td><td>${r.buy_at}</td>
+    <td>${r.sell_at}</td><td style="text-align:right;color:var(--ok)">+${r.margin}</td></tr>`).join("")
+    :'<tr><td colspan="4" style="color:var(--mut)">none learned yet — probes are scouting…</td></tr>';
   const cons = d.contracts.length ? d.contracts.map(c=>`<tr><td>${c.type}</td>
     <td>${c.deliver}</td><td>${c.to}</td><td>${cr(c.pay)}</td>
     <td><span class="pill ${c.state==='accepted'?'run':'idle'}">${c.state}</span></td></tr>`).join("")
@@ -289,6 +296,8 @@ function render(d){
     ${ships}</table></div>
   <div class="card" style="margin-top:14px"><h2>Contracts</h2>
     <table><tr><th>Type</th><th>Deliver</th><th>To</th><th>Pays</th><th>State</th></tr>${cons}</table></div>
+  <div class="card" style="margin-top:14px"><h2>Learned routes <span style="color:var(--mut);font-weight:400;text-transform:none">— the agent's trade-route memory</span></h2>
+    <table><tr><th>Good</th><th>Buy at</th><th>Sell at</th><th>+/unit</th></tr>${routesRows}</table></div>
   ${ap.log && ap.log.length?`<div class="card" style="margin-top:14px"><h2>Engine log</h2>
     <div class="log">${ap.log.map(l=>l.replace(/</g,'&lt;')).join("\n")}</div></div>`:''}
   `;
