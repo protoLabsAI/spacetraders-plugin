@@ -79,8 +79,25 @@ def load_token() -> str | None:
 
 
 def save_token(token: str) -> None:
-    _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _TOKEN_FILE.write_text(token.strip() + "\n")
+    """Persist the active agent token to config/secrets.yaml (the SINGLE source the server
+    reads) AND apply it live in this process (``_CONFIG_TOKEN``) — so a fresh-start or an
+    agent swap takes effect immediately, with one consistent store. Falls back to the legacy
+    token file only if secrets.yaml can't be written (avoids the old file-vs-secrets split)."""
+    global _CONFIG_TOKEN
+    token = token.strip()
+    _CONFIG_TOKEN = token  # live: this process switches agent right away
+    try:
+        import yaml
+
+        # cwd-relative (both the server and fresh_start run from the repo root) — robust
+        # against the parents[] resolution that stranded the token under config/config/.
+        path = Path("config/secrets.yaml")
+        data = (yaml.safe_load(path.read_text()) if path.exists() else {}) or {}
+        data.setdefault("spacetraders", {})["token"] = token
+        path.write_text(yaml.safe_dump(data, default_flow_style=False, sort_keys=False))
+    except Exception:  # noqa: BLE001 — never lose the token
+        _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _TOKEN_FILE.write_text(token + "\n")
 
 
 async def call(

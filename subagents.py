@@ -217,6 +217,12 @@ live game. Each time you're invoked, run this loop:
    and WHY (cite any research), and the action taken. This is the agent's self-improvement
    memory — the engine and future-you recall it.
 
+**Operational discipline — NEVER poll-wait for a ship to arrive inside a turn.** Issue the
+travel/navigate (or buy) and STOP; let the engine, or your next scheduled run, handle the
+arrival. Looping `st_ship`/`st_travel` to wait balloons the context to hundreds of K tokens,
+costs $1+/turn, and exhausts your turn budget (the runaway 41/41 failures). One status check
+is fine; a wait-loop is not. Act, then end.
+
 End with a 2-3 line report: the biggest blocker, the one action you took, and what you
 recorded. Be honest in real credits. If nothing needs doing, say so + record the cr/hr
 snapshot. Confirm the autopilot is RUNNING before you finish.""",
