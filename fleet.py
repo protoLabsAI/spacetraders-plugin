@@ -714,10 +714,13 @@ async def _run_ops(minutes: float) -> None:
 def request_stop() -> None:
     """Signal the self-perpetuating engine to wind down after the current window. Called
     by the plugin's goal hook when the operator's substrate goal is achieved."""
+    _OPS["want_running"] = False   # intentional wind-down — the watchdog must NOT re-kick
     _OPS["stop"] = True
 
 
 def start_ops(minutes: float) -> str:
+    _OPS["want_running"] = True   # operator wants the engine up; the watchdog keeps it there
+    _ensure_watchdog()
     task = _OPS.get("task")
     if task is not None and not task.done():
         return "Fleet ops already running — check status before starting another."
@@ -725,10 +728,12 @@ def start_ops(minutes: float) -> str:
     _OPS["result"] = None
     _OPS["task"] = asyncio.create_task(_run_ops(minutes))
     return (f"Fleet ops started in the background for ~{minutes:g} min. The whole "
-            f"fleet is working under one rate budget. Check st_autopilot_status.")
+            f"fleet is working under one rate budget (watchdog keeping it alive). "
+            f"Check st_autopilot_status.")
 
 
 def stop_ops() -> str:
+    _OPS["want_running"] = False   # operator stop — the watchdog must NOT re-kick
     task = _OPS.get("task")
     if task is None or task.done():
         return "No fleet ops running."
@@ -736,12 +741,97 @@ def stop_ops() -> str:
     return "Stopping fleet ops."
 
 
+# --- Reliability watchdog (deterministic, NO LLM) -------------------------------------
+# The engine self-PERPETUATES (loops windows) but does not self-MONITOR: a transient
+# ConnectTimeout drops _run_ops, or a window ends and it stops — and the fleet sits idle
+# until a human notices. This background task is the heartbeat. While the operator wants
+# the engine running (want_running, cleared only on an INTENTIONAL stop/goal-reached) it:
+#   - re-kicks a crashed/stopped engine, and
+#   - breaks a stall (engine "running" but its log is frozen AND every ship is idle).
+# It NEVER dies (all exceptions swallowed) and writes a capped wd_log for observability.
+# See docs/dev/reliability-notes.md — the deterministic layer is the heartbeat; the LLM
+# agent is the exception handler, not the other way around.
+_WD_INTERVAL = 90       # seconds between health checks
+_WD_STALL_TICKS = 3     # consecutive frozen-log checks (~4.5 min) before calling it a stall
+
+
+def _engine_running() -> bool:
+    task = _OPS.get("task")
+    return task is not None and not task.done()
+
+
+def _wd_log(msg: str) -> None:
+    log = _OPS.setdefault("wd_log", [])
+    log.append(msg)
+    del log[:-30]   # keep the last 30
+
+
+def _ensure_watchdog() -> None:
+    """Start the watchdog once (idempotent). Created lazily from the first start_ops, which
+    runs in an async context (an event loop exists)."""
+    wd = _OPS.get("watchdog")
+    if wd is None or wd.done():
+        _OPS["watchdog"] = asyncio.create_task(_watchdog())
+
+
+async def _watchdog() -> None:
+    frozen = 0
+    last_loglen = -1
+    rekicks = 0
+    while True:
+        try:
+            await asyncio.sleep(_WD_INTERVAL)
+            if not _OPS.get("want_running"):
+                frozen = 0
+                continue
+            # (1) crashed / stopped while we want it running → re-kick
+            if not _engine_running():
+                err = (_OPS.get("result") or {}).get("error")
+                rekicks += 1
+                _wd_log(f"engine down ({err or 'stopped'}) — re-kick #{rekicks}")
+                if rekicks == 5:
+                    _wd_log("engine persistently failing — may need attention")
+                start_ops(_OPS.get("started_minutes") or 15.0)
+                frozen = 0
+                continue
+            rekicks = 0
+            # (2) running but its log is frozen → possible stall. Only act if NO ship is in
+            #     transit (a long DRIFT legitimately freezes the log) — else don't false-trip.
+            loglen = len(_OPS.get("log", []))
+            if loglen != last_loglen:
+                last_loglen = loglen
+                frozen = 0
+                continue
+            frozen += 1
+            if frozen >= _WD_STALL_TICKS:
+                try:
+                    ships = await C.call("GET", "/my/ships", params={"limit": 20})
+                    moving = any(s["nav"]["status"] == "IN_TRANSIT" for s in ships)
+                except Exception:  # noqa: BLE001
+                    moving = True   # can't tell → don't false-trip
+                if not moving:
+                    _wd_log("stall (log frozen, all ships idle) — restarting engine")
+                    t = _OPS.get("task")
+                    if t and not t.done():
+                        t.cancel()
+                    await asyncio.sleep(2)
+                    start_ops(_OPS.get("started_minutes") or 15.0)
+                frozen = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — the watchdog must NEVER die
+            await asyncio.sleep(_WD_INTERVAL)
+
+
 def ops_status() -> dict:
     task = _OPS.get("task")
     running = task is not None and not task.done()
     return {
         "running": running,
+        "want_running": _OPS.get("want_running", False),
+        "watchdog": (_OPS.get("watchdog") is not None and not _OPS["watchdog"].done()),
         "started_minutes": _OPS.get("started_minutes", 0),
         "recent_log": _OPS.get("log", [])[-6:],
+        "watchdog_log": _OPS.get("wd_log", [])[-5:],
         "result": _OPS.get("result"),
     }
