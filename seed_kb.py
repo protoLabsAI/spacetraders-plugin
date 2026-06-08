@@ -22,6 +22,15 @@ from knowledge.store import KnowledgeStore
 SOURCE = "spacetraders-seed"
 
 LESSONS: list[tuple[str, str]] = [
+    ("contracts-are-the-engine", (
+        "Contracts are the EARLY-GAME capital engine — work them aggressively, never idle on "
+        "one. A procurement contract that pays big (e.g. 169k) is worth a LONG haul even if the "
+        "delivery is far: the ship refuels en route or DRIFTs (1 fuel, slow) to reach a distant "
+        "MARKET, and it refuels on arrival so it won't strand. Only decline a far contract if "
+        "it's ALSO low-value — the J66 trap was far AND not worth it. Don't throw away a "
+        "lucrative contract over one tank of fuel; the reachability guard is value-aware "
+        "(_HAUL_WORTH). While the price-map is still filling for supply-chain trade, contracts "
+        "ARE the income — lead with them.")),
     ("supply-chain-trading", (
         "SpaceTraders sustained trade is the SUPPLY CHAIN, not random arbitrage. Buy a good "
         "where a market EXPORTS it (type EXPORT, supply HIGH/ABUNDANT -> cheap, and it REFILLS "
