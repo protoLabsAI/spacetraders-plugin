@@ -66,6 +66,24 @@ def register(registry) -> None:
         registry.register_goal_verifier("spacetraders:fleet_size", _verify_fleet_size)
         log.info("[spacetraders] registered goal verifier spacetraders:fleet_size")
 
+        async def _verify_cargo_capacity(spec, ctx):
+            # HAULING POWER, not ship count. A 'reach N ships' goal gets gamed by buying
+            # cheap zero-hold probes (5 scouts = "6 ships" but no cargo to carry). Summing
+            # cargo capacity rewards the ship that actually grows income: another hauler.
+            from graph.goals.types import VerifyResult
+
+            from .client import call
+            try:
+                ships = await call("GET", "/my/ships", params={"limit": 20})
+                have = sum((s.get("cargo") or {}).get("capacity", 0) for s in ships)
+            except Exception as e:  # noqa: BLE001
+                return VerifyResult(False, f"could not read fleet: {e}", "")
+            want = int((spec.get("args") or {}).get("min", 0))
+            return VerifyResult(have >= want, f"cargo capacity {have} / {want} units", str(have))
+
+        registry.register_goal_verifier("spacetraders:cargo_capacity", _verify_cargo_capacity)
+        log.info("[spacetraders] registered goal verifier spacetraders:cargo_capacity")
+
     # Goal hook (ADR 0028, PR3) — when the operator's substrate goal is achieved, wind
     # down the self-perpetuating engine. This is why WHEN to stop isn't hardcoded in the
     # engine: the target lives in the goal system (any spacetraders:credits value), and
