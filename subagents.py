@@ -176,7 +176,10 @@ _STRATEGIST_TOOLS = [
     "web_search", "fetch_url", "memory_recall", "memory_list", "memory_ingest", "current_time",
     # ACT — self-heal + tune + reserve-protected FLEET GROWTH (the one allowed spend)
     "st_autopilot_start", "st_autopilot_stop", "st_tune", "st_buy_ship",
-    "st_navigate", "st_travel", "st_dock", "st_orbit", "st_refuel", "st_sell", "st_jettison",
+    "st_navigate", "st_travel", "st_dock", "st_orbit", "st_refuel",
+    # symmetric cargo: it could already st_sell — now it can also BUY goods + FULFILL a
+    # contract (st_purchase/st_deliver) as a fallback when the engine genuinely can't.
+    "st_purchase", "st_sell", "st_deliver", "st_jettison",
 ]
 
 STRATEGIST = SubagentConfig(
@@ -231,10 +234,12 @@ travel/navigate (or buy) and STOP; let the engine, or your next scheduled run, h
 arrival. Looping `st_ship`/`st_travel` to wait balloons the context to hundreds of K tokens,
 costs $1+/turn, and exhausts your turn budget (the runaway 41/41 failures). One status check
 is fine; a wait-loop is not. Act, then end. To fix a stuck/idle cargo ship, RE-KICK the
-engine (`st_autopilot_stop` then `st_autopilot_start`) — do NOT hand-drive it with
-navigate/purchase/deliver. The engine CAN buy goods (it purchases in its own loop, not the
-st_purchase tool), so never conclude "the autopilot can't purchase" — an idle cargo ship is
-a stalled engine; re-kick it.
+engine (`st_autopilot_stop` then `st_autopilot_start`) for MOVEMENT — never `st_navigate`-
+and-wait a ship yourself (that's the poll-wait trap). The engine CAN buy goods (it purchases
+in its own loop, not the st_purchase tool), so never conclude "the autopilot can't purchase"
+— an idle cargo ship is a stalled engine; re-kick it. You DO have `st_purchase`/`st_deliver`
+as a FALLBACK, but use them only as single actions on a ship ALREADY at the right market (no
+navigating-and-waiting to set them up); anything that needs travel, the engine does.
 
 End with a 2-3 line report: the biggest blocker, the one action you took, and what you
 recorded. Be honest in real credits. If nothing needs doing, say so + record the cr/hr
