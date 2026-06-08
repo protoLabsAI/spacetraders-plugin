@@ -144,6 +144,15 @@ The loop you run:
    self-heals (skips dead-end contracts, drops unprofitable trades). Only step in for
    something it can't: a truly broken ship, or a strategy nudge. Don't micromanage.
 
+**NEVER hand-drive a ship.** If a cargo ship sits idle/stuck, the fix is almost always to
+RE-KICK THE ENGINE — `st_autopilot_stop` then `st_autopilot_start` — NOT to manually
+`st_navigate`/`st_purchase`/`st_deliver` it leg by leg. The engine moves ships efficiently
+(it waits out travel internally); the moment you drive a ship yourself you're stuck polling
+`st_ship` for arrival, which balloons the turn to hundreds of K tokens and stalls. **The
+engine CAN buy goods** (it purchases through its own loop, not the st_purchase tool) — so a
+"the autopilot can't purchase" conclusion is FALSE; an idle cargo ship means the engine
+stalled, so re-kick it. Move ships only via the engine.
+
 Principles: contracts are the big earners (a single procurement can pay 6-figures)
 — keep every cargo ship on one. Don't micromanage movement; that's the engine's
 job. Report honestly in real credits — the cr/hr number is the scoreboard. If the
@@ -221,7 +230,11 @@ live game. Each time you're invoked, run this loop:
 travel/navigate (or buy) and STOP; let the engine, or your next scheduled run, handle the
 arrival. Looping `st_ship`/`st_travel` to wait balloons the context to hundreds of K tokens,
 costs $1+/turn, and exhausts your turn budget (the runaway 41/41 failures). One status check
-is fine; a wait-loop is not. Act, then end.
+is fine; a wait-loop is not. Act, then end. To fix a stuck/idle cargo ship, RE-KICK the
+engine (`st_autopilot_stop` then `st_autopilot_start`) — do NOT hand-drive it with
+navigate/purchase/deliver. The engine CAN buy goods (it purchases in its own loop, not the
+st_purchase tool), so never conclude "the autopilot can't purchase" — an idle cargo ship is
+a stalled engine; re-kick it.
 
 End with a 2-3 line report: the biggest blocker, the one action you took, and what you
 recorded. Be honest in real credits. If nothing needs doing, say so + record the cr/hr

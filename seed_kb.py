@@ -22,6 +22,15 @@ from knowledge.store import KnowledgeStore
 SOURCE = "spacetraders-seed"
 
 LESSONS: list[tuple[str, str]] = [
+    ("engine-drives-ships", (
+        "The deterministic autopilot engine MOVES SHIPS and BUYS GOODS itself (via direct "
+        "API in its own loop, NOT the st_navigate/st_purchase tools). To fix a stuck or idle "
+        "cargo ship, RE-KICK the engine — st_autopilot_stop then st_autopilot_start — do NOT "
+        "hand-drive it with navigate/purchase/deliver. Manually driving a ship forces you to "
+        "poll st_ship for arrival, ballooning the turn to hundreds of K tokens and stalling. "
+        "The agent's job is STRATEGY; the engine does the clicking. NEVER conclude 'the "
+        "autopilot can't purchase' — it can; an idle cargo ship means the engine stalled, "
+        "so re-kick it.")),
     ("buying-ships", (
         "SpaceTraders ship-buying: you only need ANY of your ships PRESENT at a shipyard "
         "to buy — so buy at the NEAREST shipyard using a ship already close (probes fly "
