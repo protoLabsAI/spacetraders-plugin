@@ -130,7 +130,16 @@ async def call(
     async with httpx.AsyncClient(timeout=30.0) as http:
         for attempt in range(4):
             await _pace()
-            resp = await http.request(method, url, headers=headers, json=json, params=params)
+            try:
+                resp = await http.request(method, url, headers=headers, json=json, params=params)
+            except (httpx.TransportError, httpx.TimeoutException) as e:
+                # Transient network blip (ConnectError / ReadTimeout / etc.) — back off and
+                # retry instead of letting it bubble up and drop the engine's ops loop (the
+                # 'Autopilot errored (ConnectTimeout)' failures). Engine hardening, pt 2.
+                if attempt < 3:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                raise SpaceTradersError(f"network error after retries: {type(e).__name__}") from e
             if resp.status_code == 429 and attempt < 3:
                 await asyncio.sleep(float(resp.headers.get("Retry-After", "1")) + 0.2)
                 continue

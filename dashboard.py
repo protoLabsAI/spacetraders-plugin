@@ -201,8 +201,11 @@ async def _snapshot() -> dict:
         "contracts": [_contract_row(c) for c in contracts if not c.get("fulfilled")][:4],
         "autopilot": {
             "running": ops.get("running", False),
+            "want_running": ops.get("want_running", False),
+            "watchdog": ops.get("watchdog", False),  # the reliability heartbeat alive?
             "window": ops.get("started_minutes", 0),
             "log": ops.get("recent_log", []),
+            "watchdog_log": ops.get("watchdog_log", []),  # recoveries the watchdog made
             "last_per_hour": last.get("per_hour"),
             "last_gained": last.get("gained"),
         },
