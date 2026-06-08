@@ -51,6 +51,16 @@ async def main() -> None:
             C.save_token(d["token"])
             a = d["agent"]
             print(f"✓ registered {a['symbol']} ({faction}) — {a['credits']:,} cr, HQ {a['headquarters']}; token saved")
+            # Tidy the shared price store down to THIS system — a fresh draw is a new system,
+            # so old systems' rows are dead clutter (never queried, but no need to hoard them).
+            try:
+                from spacetraders import prices
+                sysid = "-".join(a["headquarters"].split("-")[:2])
+                dropped = prices.prune(sysid)
+                if dropped:
+                    print(f"✓ pruned {dropped} stale/other-system price rows (kept {sysid})")
+            except Exception:  # noqa: BLE001
+                pass
         except C.SpaceTradersError as e:
             print(f"… register failed ({e}); continuing with the saved agent token if any")
     else:

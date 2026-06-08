@@ -101,3 +101,23 @@ def stats(system: str) -> dict:
         return {"markets": wps, "observations": obs}
     except Exception:  # noqa: BLE001
         return {"markets": 0, "observations": 0}
+
+
+def prune(keep_system: str | None = None, max_age: float = 86_400.0) -> int:
+    """Tidy the shared price store: drop rows for OTHER systems (dead clutter from past
+    agents/draws — never queried, since price_map is system-keyed) and any row older than
+    ``max_age`` (default 1 day). Correctness doesn't depend on this — price_map already
+    filters by system + a 1-hour age cutoff — it just keeps the file from growing forever.
+    Call on a fresh start with the new agent's system. Best-effort; returns rows deleted."""
+    try:
+        c = _conn()
+        before = c.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
+        cutoff = time.time() - max_age
+        if keep_system:
+            c.execute("DELETE FROM prices WHERE system != ? OR ts < ?", (keep_system, cutoff))
+        else:
+            c.execute("DELETE FROM prices WHERE ts < ?", (cutoff,))
+        c.commit()
+        return before - c.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
+    except Exception:  # noqa: BLE001
+        return 0
