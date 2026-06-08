@@ -22,6 +22,14 @@ from knowledge.store import KnowledgeStore
 SOURCE = "spacetraders-seed"
 
 LESSONS: list[tuple[str, str]] = [
+    ("buying-ships", (
+        "SpaceTraders ship-buying: you only need ANY of your ships PRESENT at a shipyard "
+        "to buy — so buy at the NEAREST shipyard using a ship already close (probes fly "
+        "free + fast). Do NOT route a distant/slow ship across the system just to buy — a "
+        "long DRIFT to a shipyard wastes ~an hour. STOP the autopilot first so it doesn't "
+        "re-task the ship you send to the shipyard. Reserve-protected growth: buy a 2nd/3rd "
+        "CARGO ship first for resilience (one stuck ship must not halt all income), keep a "
+        "working capital reserve, and grow toward the fleet-size goal.")),
     ("contracts", (
         "SpaceTraders: only ONE active contract per agent at a time — negotiating a "
         "second returns error 4103/4511 ('already has an active contract'). "
