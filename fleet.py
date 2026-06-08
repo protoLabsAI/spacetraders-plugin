@@ -452,7 +452,9 @@ _MIN_MARGIN = 30        # cr/unit FLOOR below which even a supply-chain route is
                         # selection (a 10% route moving 60 units beats a 50% one capped at 5)
 _BUY_BUFFER = 600_000   # only reinvest in a hauler when this comfortable (cost ~290k)
 _MAX_SHIPS = 8          # cap auto-bought fleet size
-_PROBE_BUFFER = 80_000  # probes ~23k + fly free — buy them cheap to scout
+_PROBE_BUFFER = 150_000  # keep a healthy reserve before scouting-buys. 80k was too low —
+                         # the engine drained the treasury to ~80k buying 5 probes fast
+                         # (PROTORUN3 bled ~115k before contracts/trade could cover it)
 _MAP_TARGET = 8         # markets to have in the price map before arbitrage surfaces
 _MAX_PROBES = 5         # enough parallel scouts
 _ROUTE_CACHE: dict = {"at": -1e9, "route": None}
