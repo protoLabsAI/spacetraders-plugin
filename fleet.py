@@ -154,19 +154,51 @@ async def _buy(sym: str, good: str, target: int, *, max_price: float | None = No
             break
 
 
+async def _sell(sym: str, good: str, units: int, *, log=None) -> int:
+    """Sell ``units`` of ``good`` at the current docked market, CHUNKED to the market's
+    per-transaction volume limit (``tradeVolume``) — a low-limit good (e.g. CLOTHING cap 20)
+    would otherwise error [4604] when dumped all at once and strand the ship. Returns sold."""
+    s = await _ship(sym)
+    wp = s["nav"]["waypointSymbol"]
+    try:
+        m = await C.call("GET", f"/systems/{T._system_of(wp)}/waypoints/{wp}/market")
+        vol = next((g.get("tradeVolume", 20) for g in m.get("tradeGoods", []) if g["symbol"] == good), 20)
+    except C.SpaceTradersError:
+        vol = 20
+    vol = vol or 20
+    sold = 0
+    while sold < units:
+        try:
+            r = await C.call("POST", f"/my/ships/{sym}/sell",
+                             json={"symbol": good, "units": min(units - sold, vol)})
+            sold += r["transaction"]["units"]
+            if log:
+                log(f"{sym}: sold {r['transaction']['units']}×{good} @ {r['transaction']['pricePerUnit']}")
+        except C.SpaceTradersError as e:
+            if log:
+                log(f"{sym}: sell stopped at {sold}/{units} {good} — {e}")
+            break
+    return sold
+
+
 async def _dump_except(sym: str, keep: str, *, log=None) -> None:
     """Sell (or jettison) everything that isn't ``keep`` to free the hold."""
+    try:
+        await C.call("POST", f"/my/ships/{sym}/dock")
+    except C.SpaceTradersError:
+        pass
     s = await _ship(sym)
     for it in list(s["cargo"]["inventory"]):
         if it["symbol"] == keep:
             continue
-        try:
-            await C.call("POST", f"/my/ships/{sym}/dock")
-            await C.call("POST", f"/my/ships/{sym}/sell",
-                         json={"symbol": it["symbol"], "units": it["units"]})
-        except C.SpaceTradersError:
-            await C.call("POST", f"/my/ships/{sym}/jettison",
-                         json={"symbol": it["symbol"], "units": it["units"]})
+        await _sell(sym, it["symbol"], it["units"], log=log)   # chunked to the market limit
+        left = await _held(sym, it["symbol"])
+        if left > 0:  # market won't buy it → jettison to free the hold
+            try:
+                await C.call("POST", f"/my/ships/{sym}/jettison",
+                             json={"symbol": it["symbol"], "units": left})
+            except C.SpaceTradersError:
+                pass
 
 
 # ── jobs ─────────────────────────────────────────────────────────────────────
@@ -279,8 +311,8 @@ async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *, log=None)
         return f"could not buy {good} at {buy_wp} (or price ≥ resale — guarded)"
     await travel_to(sym, sell_wp, log=log)
     await C.call("POST", f"/my/ships/{sym}/dock")
-    r = await C.call("POST", f"/my/ships/{sym}/sell", json={"symbol": good, "units": held})
-    return f"traded {held}×{good} → {r['transaction']['totalPrice']:,} cr"
+    sold = await _sell(sym, good, held, log=log)
+    return f"traded {sold}×{good} (of {held} hauled)"
 
 
 async def job_scout(sym: str, market_waypoints: list, deadline: float, *, log=None) -> dict:
@@ -387,12 +419,9 @@ async def _sell_all_here(sym: str, *, log=None) -> int:
     s = await _ship(sym)
     earned = 0
     for it in list(s["cargo"]["inventory"]):
-        try:
-            r = await C.call("POST", f"/my/ships/{sym}/sell",
-                             json={"symbol": it["symbol"], "units": it["units"]})
-            earned += r["transaction"]["totalPrice"]
-        except C.SpaceTradersError:
-            pass  # this market doesn't buy that good
+        before = await _credits()
+        await _sell(sym, it["symbol"], it["units"], log=log)   # chunked to the market limit
+        earned += await _credits() - before
     return earned
 
 

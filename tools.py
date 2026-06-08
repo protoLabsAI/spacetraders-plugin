@@ -786,21 +786,39 @@ async def st_purchase(ship: str, good: str, units: int) -> str:
 async def st_sell(ship: str, good: str, units: int) -> str:
     """Sell cargo at the current market (ship must be DOCKED at a MARKETPLACE).
 
+    AUTO-CHUNKS to the market's per-transaction limit (tradeVolume), so a low-limit good
+    (e.g. CLOTHING cap 20) sells in batches instead of erroring [4604].
+
     Args:
         ship: ship symbol.
         good: trade-good symbol to sell, e.g. "IRON_ORE".
         units: how many units to sell.
     """
-    try:
-        d = await call("POST", f"/my/ships/{ship}/sell",
-                       json={"symbol": good.upper(), "units": int(units)})
-    except SpaceTradersError as e:
-        return f"Error: {e}"
-    t = d.get("transaction", {})
-    ag = d.get("agent", {})
-    return (f"Sold {t.get('units', '?')}×{t.get('tradeSymbol', good)} for "
-            f"{t.get('totalPrice', '?')} cr ({t.get('pricePerUnit', '?')}/u). "
-            f"Credits now {ag.get('credits', '?'):,}. {_cargo_line(d.get('cargo', {}))}")
+    good, units = good.upper(), int(units)
+    try:  # read the market's per-transaction volume limit for this good
+        s = await call("GET", f"/my/ships/{ship}")
+        wp = s["nav"]["waypointSymbol"]
+        m = await call("GET", f"/systems/{_system_of(wp)}/waypoints/{wp}/market")
+        vol = next((g.get("tradeVolume", 20) for g in m.get("tradeGoods", []) if g["symbol"] == good), 20) or 20
+    except SpaceTradersError:
+        vol = 20
+    sold, total, credits, cargo = 0, 0, None, {}
+    while sold < units:
+        try:
+            d = await call("POST", f"/my/ships/{ship}/sell",
+                           json={"symbol": good, "units": min(units - sold, vol)})
+        except SpaceTradersError as e:
+            if sold == 0:
+                return f"Error: {e}"
+            break
+        t = d.get("transaction", {})
+        sold += t.get("units", 0)
+        total += t.get("totalPrice", 0)
+        credits = d.get("agent", {}).get("credits")
+        cargo = d.get("cargo", {})
+    return (f"Sold {sold}×{good} for {total:,} cr"
+            + (f". Credits now {credits:,}." if credits is not None else ".")
+            + f" {_cargo_line(cargo)}")
 
 
 # ── Contracts ────────────────────────────────────────────────────────────────
