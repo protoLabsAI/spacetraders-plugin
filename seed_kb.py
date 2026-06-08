@@ -22,6 +22,15 @@ from knowledge.store import KnowledgeStore
 SOURCE = "spacetraders-seed"
 
 LESSONS: list[tuple[str, str]] = [
+    ("supply-chain-trading", (
+        "SpaceTraders sustained trade is the SUPPLY CHAIN, not random arbitrage. Buy a good "
+        "where a market EXPORTS it (type EXPORT, supply HIGH/ABUNDANT -> cheap, and it REFILLS "
+        "each cycle) and sell where another market IMPORTS it (type IMPORT, supply SCARCE -> "
+        "dear). Random buy-low/sell-high on arbitrary goods saturates fast: every trade moves "
+        "the price, capped by tradeVolume, so a 50% spread dies in two trades while a 10% "
+        "export->import route refills forever. Rank routes by margin x tradeVolume (throughput), "
+        "not raw spread. The engine's best_route does this; trust export->import over a bigger "
+        "one-off spread.")),
     ("engine-drives-ships", (
         "The deterministic autopilot engine MOVES SHIPS and BUYS GOODS itself (via direct "
         "API in its own loop, NOT the st_navigate/st_purchase tools). To fix a stuck or idle "

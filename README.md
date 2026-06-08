@@ -75,6 +75,17 @@ lessons each cycle.
 > run `fresh_start.py` again — it re-registers, re-seeds, and the engine recalls what it
 > learned last cycle. Nothing per-reset is hard-coded.
 
+### Supply-chain trading (not random arbitrage)
+
+The trade engine routes the **supply chain**, not arbitrary buy-low/sell-high. It buys a
+good where a market **EXPORTS** it (supply `HIGH`/`ABUNDANT` → cheap, and it **refills**
+every cycle) and sells where another market **IMPORTS** it (supply `SCARCE` → dear, and
+that demand refills too). Random arbitrage on any good saturates fast — every trade moves
+the price, capped by `tradeVolume`, so a 50% spread dies in two trades while a 10%
+export→import route refills forever. So `best_route` ranks by **margin × tradeVolume**
+(per-cycle throughput), not raw spread: a 10% route moving 60 units beats a 50% one capped
+at 5. Cross-market `EXCHANGE` spreads are only a fallback when no export→import pair exists.
+
 ## Intentionally NOT min-maxed — room to make it yours
 
 This plugin is a **demonstration of the substrate's capabilities** — an autonomous,

@@ -15,6 +15,13 @@ PYTHONPATH=. python plugins/spacetraders/seed_kb.py        # → ~/.protoagent/k
 
 ## The lessons (headings: `spacetraders:<topic>`, domain `fact`)
 
+- **supply-chain-trading** — sustained trade is the SUPPLY CHAIN, not random arbitrage.
+  Buy where a market EXPORTS a good (type EXPORT, supply HIGH/ABUNDANT → cheap, refills
+  each cycle) and sell where another IMPORTS it (type IMPORT, supply SCARCE → dear).
+  Random buy-low/sell-high saturates fast — every trade moves the price (capped by
+  tradeVolume), so a 50% spread dies in two trades while a 10% export→import route
+  refills forever. Rank by margin × tradeVolume (throughput), not raw spread. `best_route`
+  does this; trust export→import over a bigger one-off spread.
 - **contracts** — only ONE active contract per agent at a time (error 4103/4511 on
   a second). Procurement contracts are the biggest early earners (advance + large
   fulfillment) and build reputation. One ship on the contract; the rest haul/trade/mine.

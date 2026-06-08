@@ -675,10 +675,11 @@ async def st_trade_routes(system: str, limit: int = 8) -> str:
     if not routes:
         return f"No export→import arbitrage routes found in {system}."
     # Price-ranked best, where live prices exist (a ship has visited the market).
-    from .analysis import best_arbitrage
-    best = best_arbitrage(markets)
-    head = (f"💰 Best by price: {best['good']} buy @ {best['buy_at']} → sell @ "
-            f"{best['sell_at']} (+{best['profit_per_unit']:,}/unit)\n" if best else "")
+    from .analysis import best_route
+    best = best_route(markets)
+    head = (f"💰 Best route: {best['good']} buy @ {best['buy_at']} → sell @ "
+            f"{best['sell_at']} (+{best['profit_per_unit']:,}/unit × {best.get('volume', '?')} vol, "
+            f"{best.get('kind', '?')})\n" if best else "")
     return (head + f"Trade routes in {system} (buy-export → sell-import):\n"
             + "\n".join(routes[:limit])
             + "\n  (station a ship/probe at a market for live per-unit prices)")

@@ -447,7 +447,9 @@ async def _mining_loop(sym: str, deadline: float, asteroid: str, market: str, *,
 
 
 # Growth-engine knobs (zero-to-million doctrine): contracts seed, trade compounds.
-_MIN_MARGIN = 30        # cr/unit floor for a trade route (fuel/time eats less than this)
+_MIN_MARGIN = 30        # cr/unit FLOOR below which even a supply-chain route isn't worth
+                        # the fuel; best_route's margin×tradeVolume scoring does the real
+                        # selection (a 10% route moving 60 units beats a 50% one capped at 5)
 _BUY_BUFFER = 600_000   # only reinvest in a hauler when this comfortable (cost ~290k)
 _MAX_SHIPS = 8          # cap auto-bought fleet size
 _PROBE_BUFFER = 80_000  # probes ~23k + fly free — buy them cheap to scout
@@ -508,8 +510,8 @@ async def _best_trade_route(system: str, market_wps: list) -> dict | None:
             continue
         if m.get("tradeGoods"):
             prices.record_market(system, wp, m["tradeGoods"])
-    from .analysis import best_arbitrage
-    best = best_arbitrage(prices.price_map(system))
+    from .analysis import best_route
+    best = best_route(prices.price_map(system), min_margin=_MIN_MARGIN)
     route = best if best and best.get("profit_per_unit", 0) >= _MIN_MARGIN else None
     if route:
         routes.remember_route(system, route["good"], route["buy_at"],
