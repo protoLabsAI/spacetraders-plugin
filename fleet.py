@@ -384,22 +384,21 @@ async def _contract_loop(sym: str, deadline: float, claimed: set, lock, *, log=N
             if not buys:
                 return (f"{n} done; declined an un-sourceable {g} contract "
                         f"(no market sells it in-system) — parking, not hauling dead weight")
-            # Reachability guard — VALUE-AWARE. A far delivery isn't automatically
-            # unworkable: the ship reaches distant markets by refueling en route (CRUISE
-            # hops) or DRIFTing (1 fuel, slow), and a contract's delivery is a populated
-            # waypoint it refuels at on arrival, so it won't strand. The real question is
-            # "is the slow haul worth it?" — so decline only when it's far AND the payout
-            # doesn't justify the trip. (The J66 trap was far AND not worth it; a 169k
-            # contract to a market 761u out absolutely is.) Big lucrative contracts are the
-            # early-game capital engine — don't throw them away over one tank of fuel.
+            # Reachability guard: decline a contract whose delivery is beyond ~one tank from
+            # the source. The ship CAN technically DRIFT there (1 fuel), but a 700u+ DRIFT
+            # takes HOURS and won't finish inside an engine window — it just wedges the only
+            # cargo ship on an un-fulfillable accepted contract (the J66/DRUGS trap). Work
+            # in-range contracts + supply-chain trade instead, and bank toward a longer-range
+            # hauler. (We tried value-aware accept of far lucrative ones — the occasional 169k
+            # win wasn't worth the repeated wedging; range is a SHIP problem, not a guard one.)
             try:
                 deliver_wp = ndv["destinationSymbol"]
                 fuel_cap = (await _ship(sym))["fuel"].get("capacity") or 400
                 dist = await T._distance(T._system_of(deliver_wp), buys[0], deliver_wp)
-                payout = (ct["terms"].get("payment") or {}).get("onFulfilled", 0)
-                if dist > fuel_cap * 1.5 and payout < _HAUL_WORTH:
+                if dist > fuel_cap * 1.5:
                     return (f"{n} done; declined {g} contract — delivery {deliver_wp} is "
-                            f"{dist:.0f}u out and pays only {payout:,}, not worth the long haul")
+                            f"{dist:.0f}u from the source (> ~{fuel_cap} range), too far to work "
+                            f"reliably in a window")
             except Exception:  # noqa: BLE001 — the guard must never crash the loop
                 pass
             cid = ct["id"]
@@ -463,17 +462,13 @@ _PROBE_BUFFER = 150_000  # keep a healthy reserve before scouting-buys. 80k was 
                          # (PROTORUN3 bled ~115k before contracts/trade could cover it)
 _MAP_TARGET = 8         # markets to have in the price map before arbitrage surfaces
 _MAX_PROBES = 5         # enough parallel scouts
-_HAUL_WORTH = 50_000    # a far contract (delivery > ~1.5 tanks) is still worth working if it
-                        # pays at least this — big contracts are the early-game capital engine,
-                        # don't decline a 169k haul over one tank of fuel (refuel/DRIFT reaches it)
 _ROUTE_CACHE: dict = {"at": -1e9, "route": None}
 
 # Runtime-tunable engine knobs (the strategist adjusts these from its research/audit —
 # e.g. lower min_margin to surface routes in a thin market). The engine reads the module
 # globals at call time, so set_knob takes effect on the running autopilot immediately.
 _TUNABLE = {"min_margin": "_MIN_MARGIN", "buy_buffer": "_BUY_BUFFER", "max_ships": "_MAX_SHIPS",
-            "probe_buffer": "_PROBE_BUFFER", "map_target": "_MAP_TARGET", "max_probes": "_MAX_PROBES",
-            "haul_worth": "_HAUL_WORTH"}
+            "probe_buffer": "_PROBE_BUFFER", "map_target": "_MAP_TARGET", "max_probes": "_MAX_PROBES"}
 
 
 def knobs() -> dict:
