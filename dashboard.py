@@ -230,31 +230,23 @@ def build_dashboard_router() -> APIRouter:
 
 
 _PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Fleet</title>
+<link rel="stylesheet" href="/_ds/plugin-kit.css">
 <style>
-  :root{--bg:#0a0f14;--fg:#e6e6e6;--mut:#9aa0aa;--acc:#9b87f2;--ok:#46c46a;
-        --warn:#e0a23c;--card:#121922;--line:#1f2730}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
-    font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;font-size:14px}
+  html,body{margin:0;height:100%;background:var(--pl-color-bg);color:var(--pl-color-fg);
+    font-family:var(--pl-font-sans,ui-sans-serif,system-ui,-apple-system,sans-serif);font-size:14px}
   .wrap{max-width:920px;margin:0 auto;padding:20px}
-  h1{font-size:16px;margin:0;color:var(--acc);letter-spacing:.3px}
-  .sub{color:var(--mut);font-size:12px;margin-top:2px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
-  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut);margin:0 0 10px}
-  .big{font-size:30px;font-weight:650;color:var(--fg)}
-  .big small{font-size:13px;color:var(--mut);font-weight:400}
+  h1{font-size:16px;margin:0;color:var(--pl-color-accent);letter-spacing:.3px}
+  .sub{color:var(--pl-color-fg-muted);font-size:12px;margin-top:2px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--pl-space-4,14px);margin-top:16px}
+  .pl-card{margin:0}
+  #body>.pl-card,#body>.grid{margin-top:var(--pl-space-4,14px)}
+  #body>.pl-stats{margin-top:16px}
+  .pl-card>.pl-panel-header{margin:calc(-1*var(--pl-space-4)) calc(-1*var(--pl-space-4)) var(--pl-space-3);flex-wrap:wrap}
+  .big{font-size:30px;font-weight:650;color:var(--pl-color-fg)}
+  .big small{font-size:13px;color:var(--pl-color-fg-muted);font-weight:400}
   table{width:100%;border-collapse:collapse;font-size:13px}
-  th{text-align:left;color:var(--mut);font-weight:500;padding:4px 8px 4px 0;border-bottom:1px solid var(--line)}
-  td{padding:5px 8px 5px 0;border-bottom:1px solid var(--line)}
-  .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px}
-  .pill.run{background:rgba(70,196,106,.15);color:var(--ok)}
-  .pill.idle{background:rgba(154,160,170,.15);color:var(--mut)}
-  .pill.transit{color:var(--warn)} .pill.docked{color:var(--ok)} .pill.orbit{color:var(--acc)}
-  .log{font-family:ui-monospace,monospace;font-size:11.5px;color:var(--mut);
+  .log{font-family:var(--pl-font-mono,ui-monospace,monospace);font-size:11.5px;color:var(--pl-color-fg-muted);
        max-height:120px;overflow:auto;white-space:pre-wrap;line-height:1.5}
-  .err{color:var(--warn);padding:24px;text-align:center}
-  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}
-  .dot.on{background:var(--ok)} .dot.off{background:var(--mut)}
 </style></head><body><div class="wrap">
   <div style="display:flex;justify-content:space-between;align-items:baseline">
     <div><h1>🛰 protoTrader-in-space — Fleet</h1>
@@ -297,8 +289,8 @@ document.addEventListener("mousemove", e=>{
 document.addEventListener("mouseup", ()=>{ _mapDrag = null; });
 // Hover detail card for the system map — populated per-element by renderMap.
 const _mc = document.createElement("div"); _mc.id = "mapcard";
-_mc.style.cssText = "position:fixed;display:none;z-index:60;background:var(--card);border:1px solid var(--line);"
-  + "border-radius:8px;padding:8px 11px;font-size:12px;line-height:1.5;pointer-events:none;max-width:260px;"
+_mc.style.cssText = "position:fixed;display:none;z-index:60;background:var(--pl-color-bg-raised);border:var(--pl-border-width,1px) solid var(--pl-color-border);"
+  + "border-radius:var(--pl-radius,8px);padding:8px 11px;font-size:12px;line-height:1.5;pointer-events:none;max-width:260px;"
   + "box-shadow:0 6px 22px rgba(0,0,0,.5)";
 document.addEventListener("DOMContentLoaded", ()=>document.body.appendChild(_mc));
 document.addEventListener("mouseover", e=>{
@@ -313,15 +305,13 @@ document.addEventListener("mousemove", e=>{
   const ox = (e.clientX + 16 + 260 > innerWidth) ? e.clientX - 16 - 260 : e.clientX + 16;
   _mc.style.left = ox + "px"; _mc.style.top = (e.clientY + 16) + "px";
 });
-window.addEventListener("message", e => {
-  const m = e.data || {};
-  if (m.type !== "protoagent:init") return;
-  TOKEN = m.token || null;
-  if (m.theme && m.theme.bg) document.documentElement.style.setProperty("--bg", m.theme.bg);
-  if (m.theme && m.theme.fg) document.documentElement.style.setProperty("--fg", m.theme.fg);
-});
+const TMAP={bg:["--pl-color-bg"],bgPanel:["--pl-color-bg-raised","--pl-color-bg-subtle"],fg:["--pl-color-fg"],fgMuted:["--pl-color-fg-muted"],brand:["--pl-color-accent"],border:["--pl-color-border"]};
+function applyTheme(t){const r=document.documentElement;for(const[k,v] of Object.entries(t||{}))(TMAP[k]||(k.startsWith("--pl-")?[k]:[])).forEach(p=>v&&r.style.setProperty(p,v));}
+window.addEventListener("message",(e)=>{const d=e.data||{};
+  if(d.type==="protoagent:init"){if(d.token)TOKEN=d.token;applyTheme(d.theme);}
+  else if(d.type==="protoagent:theme")applyTheme(d.theme);});
 const cr = n => n == null ? "—" : n.toLocaleString() + " cr";
-const stClass = s => ({IN_TRANSIT:"transit",DOCKED:"docked",IN_ORBIT:"orbit"}[s]||"");
+const stClass = s => ({IN_TRANSIT:"warning",DOCKED:"success",IN_ORBIT:"info"}[s]||"");
 const compact = n => n==null?"—":n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?Math.round(n/1e3)+"k":""+n;
 function eta(iso){ if(!iso) return ""; const ms=new Date(iso)-new Date(); if(ms<=0) return "arriving";
   const s=Math.round(ms/1000); return Math.floor(s/60)+"m"+("0"+(s%60)).slice(-2)+"s"; }
@@ -337,14 +327,14 @@ function renderMap(d){
   const sx=v=>pad+(v-minx)/((maxx-minx)||1)*(W-2*pad);
   const sy=v=>pad+(v-miny)/((maxy-miny)||1)*(H-2*pad);
   const by={}; wps.forEach(w=>by[w.symbol]=w);
-  const col={PLANET:'#6db3f2',GAS_GIANT:'#46c46a',MOON:'#9aa0aa',ASTEROID:'#b08d57',ENGINEERED_ASTEROID:'#b08d57',ASTEROID_BASE:'#b08d57',ASTEROID_FIELD:'#b08d57',FUEL_STATION:'#e0a23c',JUMP_GATE:'#9b87f2',ORBITAL_STATION:'#9aa0aa'};
-  const lines=(d.routes||[]).map(r=>{const a=by[r.buy_at],b=by[r.sell_at];return (a&&b)?`<line x1="${sx(a.x)}" y1="${sy(a.y)}" x2="${sx(b.x)}" y2="${sy(b.y)}" stroke="#9b87f2" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>`:'';}).join('');
+  const col={PLANET:'#6db3f2',GAS_GIANT:'#46c46a',MOON:'#9aa0aa',ASTEROID:'#b08d57',ENGINEERED_ASTEROID:'#b08d57',ASTEROID_BASE:'#b08d57',ASTEROID_FIELD:'#b08d57',FUEL_STATION:'#e0a23c',JUMP_GATE:'var(--pl-color-accent)',ORBITAL_STATION:'#9aa0aa'};
+  const lines=(d.routes||[]).map(r=>{const a=by[r.buy_at],b=by[r.sell_at];return (a&&b)?`<line x1="${sx(a.x)}" y1="${sy(a.y)}" x2="${sx(b.x)}" y2="${sy(b.y)}" stroke="var(--pl-color-accent)" stroke-width="1" stroke-dasharray="3 3" opacity="0.7"/>`:'';}).join('');
   MAPCARDS={};
   const esc=s=>(''+s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
   const dots=wps.map(w=>{const c=col[w.type]||'#9aa0aa',rad=(w.type==='PLANET'||w.type==='GAS_GIANT')?5:3;const ring=w.scouted?`<circle cx="${sx(w.x)}" cy="${sy(w.y)}" r="${rad+3}" fill="none" stroke="#46c46a" stroke-width="1" opacity="0.6"/>`:'';
     const tags=[w.market?'market':'',w.scouted?'scouted':''].filter(Boolean).join(' · ');
-    const goods=(w.goods||[]).map(g=>`${esc(g.symbol)}: <span style="color:var(--ok)">${g.buy}</span> / <span style="color:var(--warn)">${g.sell}</span>`).join('<br>');
-    MAPCARDS['w:'+w.symbol]=`<b style="color:var(--acc)">${esc(w.symbol)}</b> · ${esc(w.type)}`+(tags?`<br><span class="sub">${tags}</span>`:'')+(goods?`<br><span style="font-size:11px">buy/sell:<br>${goods}</span>`:(w.market?'<br><span class="sub">not scouted yet</span>':''));
+    const goods=(w.goods||[]).map(g=>`${esc(g.symbol)}: <span style="color:var(--pl-color-status-success)">${g.buy}</span> / <span style="color:var(--pl-color-status-warning)">${g.sell}</span>`).join('<br>');
+    MAPCARDS['w:'+w.symbol]=`<b style="color:var(--pl-color-accent)">${esc(w.symbol)}</b> · ${esc(w.type)}`+(tags?`<br><span class="sub">${tags}</span>`:'')+(goods?`<br><span style="font-size:11px">buy/sell:<br>${goods}</span>`:(w.market?'<br><span class="sub">not scouted yet</span>':''));
     return `${ring}<circle cx="${sx(w.x)}" cy="${sy(w.y)}" r="${rad}" fill="${c}" data-k="w:${w.symbol}" style="cursor:pointer"/>`;}).join('');
   let paths='';
   const ships=(d.ships||[]).map(s=>{
@@ -359,9 +349,9 @@ function renderMap(d){
     } else { const w=by[s.waypoint]; if(!w) return ''; x=sx(w.x); y=sy(w.y); }
     MAPCARDS['s:'+s.symbol]=`<b style="color:#fff">${esc(s.symbol)}</b> · ${esc(s.status)}<br><span class="sub">@ ${esc(s.waypoint)} · ${esc(s.role)} · cargo ${esc(s.cargo)}${s.dest?' · → '+esc(s.dest)+extra:''}</span>`;
     return `<rect x="${x-3.5}" y="${y-3.5}" width="7" height="7" fill="#fff" transform="rotate(45 ${x} ${y})" data-k="s:${s.symbol}" style="cursor:pointer"/>`;}).join('');
-  return `<svg id="mapsvg" viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="background:#070b10;border:1px solid var(--line);border-radius:8px;cursor:grab;touch-action:none">`
+  return `<svg id="mapsvg" viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="background:#070b10;border:1px solid var(--pl-color-border);border-radius:8px;cursor:grab;touch-action:none">`
     + `<g id="mapworld" transform="translate(${MAP_VIEW.tx},${MAP_VIEW.ty}) scale(${MAP_VIEW.s})">${lines}${paths}${dots}${ships}</g></svg>`
-    + `<div class="sub" style="margin-top:4px">scroll to zoom · drag to pan · <a href="#" onclick="MAP_VIEW={s:1,tx:0,ty:0};applyMapView();return false" style="color:var(--acc)">reset view</a></div>`;
+    + `<div class="sub" style="margin-top:4px">scroll to zoom · drag to pan · <a href="#" onclick="MAP_VIEW={s:1,tx:0,ty:0};applyMapView();return false" style="color:var(--pl-color-accent)">reset view</a></div>`;
 }
 async function poll(){
   try{
@@ -369,7 +359,7 @@ async function poll(){
     const d = await (await fetch("state",{headers:h})).json();
     render(d);
   }catch(e){ document.getElementById("body").innerHTML =
-    '<div class="err">dashboard offline — '+e+'</div>'; }
+    '<div class="pl-callout pl-callout--error"><div class="pl-callout__body">dashboard offline — '+e+'</div></div>'; }
   document.getElementById("tick").textContent = "updated " + new Date().toLocaleTimeString();
 }
 function render(d){
@@ -377,61 +367,56 @@ function render(d){
   const body = document.getElementById("body");
   if(d.error){
     document.getElementById("who").textContent = "";
-    body.innerHTML = '<div class="card err">'+
+    body.innerHTML = '<div class="pl-callout pl-callout--error"><div class="pl-callout__body">'+
       (d.token? "API error: "+d.error : "No SpaceTraders token set. Add it in System → Settings → SpaceTraders.")+
-      '</div>'; return;
+      '</div></div>'; return;
   }
   const a=d.agent, ap=d.autopilot;
   document.getElementById("who").textContent =
     a.symbol+" · "+a.faction+" · HQ "+a.hq+" · "+a.ships+" ships";
   const ships = d.ships.map(s=>`<tr><td>${s.symbol}</td><td>${s.role}</td>
-    <td><span class="pill ${stClass(s.status)}">${s.status}</span></td>
+    <td><span class="pl-badge${stClass(s.status)?' pl-badge--'+stClass(s.status):''}">${s.status}</span></td>
     <td>${s.waypoint}</td>
-    <td>${s.dest?`→ ${s.dest} · <span class="eta" data-arr="${s.arrival}">${eta(s.arrival)}</span> · ${s.mode}`:'<span style="color:var(--mut)">—</span>'}</td>
+    <td>${s.dest?`→ ${s.dest} · <span class="eta" data-arr="${s.arrival}">${eta(s.arrival)}</span> · ${s.mode}`:'<span style="color:var(--pl-color-fg-muted)">—</span>'}</td>
     <td>${s.fuel}</td><td>${s.cargo}</td></tr>`).join("");
   const lb=d.standing||{}, srv=d.server||{};
-  const board=(lb.top||[]).map((x,i)=>`<tr><td style="color:var(--mut)">#${i+1}</td><td>${x.agent}</td>
+  const board=(lb.top||[]).map((x,i)=>`<tr><td style="color:var(--pl-color-fg-muted)">#${i+1}</td><td>${x.agent}</td>
     <td style="text-align:right">${compact(x.credits)}</td></tr>`).join("");
   const youLine=`You — <b>${a.symbol}</b>: ${cr(a.credits)} · `+(lb.rank?`ranked #${lb.rank}`:"unranked")
     +(lb.cutoff?` · top ${lb.board_size} needs ${compact(lb.cutoff)}`:"");
   const rts=(d.routes||[]);
   const routesRows=rts.length?rts.map(r=>`<tr><td>${r.good}</td><td>${r.buy_at}</td>
-    <td>${r.sell_at}</td><td style="text-align:right;color:var(--ok)">+${r.margin}</td></tr>`).join("")
-    :'<tr><td colspan="4" style="color:var(--mut)">none learned yet — probes are scouting…</td></tr>';
+    <td>${r.sell_at}</td><td style="text-align:right;color:var(--pl-color-status-success)">+${r.margin}</td></tr>`).join("")
+    :'<tr><td colspan="4"><div class="pl-empty">none learned yet — probes are scouting…</div></td></tr>';
   const cons = d.contracts.length ? d.contracts.map(c=>`<tr><td>${c.type}</td>
     <td>${c.deliver}</td><td>${c.to}</td><td>${cr(c.pay)}</td>
-    <td><span class="pill ${c.state==='accepted'?'run':'idle'}">${c.state}</span></td></tr>`).join("")
-    : '<tr><td colspan="5" style="color:var(--mut)">no open contracts</td></tr>';
+    <td><span class="pl-badge${c.state==='accepted'?' pl-badge--success':(c.state==='fulfilled'?' pl-badge--info':'')}">${c.state}</span></td></tr>`).join("")
+    : '<tr><td colspan="5"><div class="pl-empty">no open contracts</div></td></tr>';
   body.innerHTML = `
-  <div class="grid">
-    <div class="card"><h2>Treasury</h2><div class="big">${a.credits.toLocaleString()}<small> cr</small></div></div>
-    <div class="card"><h2>Autopilot</h2>
-      <div class="big" style="font-size:18px">
-        <span class="dot ${ap.running?'on':'off'}"></span>${ap.running?'running':'idle'}
-        ${ap.running?`<small> · ${ap.window}m window</small>`:''}</div>
-      ${ap.last_per_hour!=null?`<div class="sub">last run: ${cr(ap.last_gained)} (≈ ${cr(ap.last_per_hour)}/hr)</div>`:''}
-    </div>
+  <div class="pl-stats">
+    <div class="pl-stat"><div class="pl-stat__num">${a.credits.toLocaleString()} cr</div><div class="pl-stat__label">Treasury</div></div>
+    <div class="pl-stat"><div class="pl-stat__num"><span class="pl-dot ${ap.running?'pl-dot--success pl-dot--pulse':''}"></span> ${ap.running?'running':'idle'}${ap.running?` · ${ap.window}m`:''}</div><div class="pl-stat__label">Autopilot${ap.last_per_hour!=null?` · last ${cr(ap.last_gained)} (≈ ${cr(ap.last_per_hour)}/hr)`:''}</div></div>
   </div>
-  <div class="grid" style="margin-top:14px">
-    <div class="card"><h2>Standing — most credits</h2>
-      <table>${board||'<tr><td style="color:var(--mut)">leaderboard unavailable</td></tr>'}</table>
+  <div class="grid">
+    <div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">Standing — most credits</h2></div>
+      <table class="pl-table">${board||'<tr><td><div class="pl-empty">leaderboard unavailable</div></td></tr>'}</table>
       <div class="sub" style="margin-top:8px">${youLine}</div></div>
-    <div class="card"><h2>Universe</h2>
+    <div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">Universe</h2></div>
       <div class="big" style="font-size:20px">wipe in <span class="wipe" data-next="${srv.next_reset||''}">${dur(srv.next_reset)}</span></div>
       <div class="sub" style="margin-top:4px">${srv.frequency||'?'} reset${srv.next_reset?` · ${new Date(srv.next_reset).toLocaleString()}`:''}</div>
       <div class="sub" style="margin-top:6px">galaxy: ${(srv.agents||'?').toLocaleString?srv.agents.toLocaleString():srv.agents} agents · ${compact(srv.ships)} ships · ${compact(srv.systems)} systems</div></div>
   </div>
-  <div class="card" style="margin-top:14px"><h2>System map — ${(d.map||{}).system||''}
-    <span style="color:var(--mut);font-weight:400;text-transform:none">— ◆ ships · ◯ scouted markets · ┄ learned routes</span></h2>
+  <div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">System map — ${(d.map||{}).system||''}</h2>
+    <span class="pl-panel-header__kicker">◆ ships · ◯ scouted markets · ┄ learned routes</span></div>
     <div id="mapbox">${renderMap(d)}</div></div>
-  <div class="card" style="margin-top:14px"><h2>Fleet (${d.ships.length})</h2>
-    <table><tr><th>Ship</th><th>Role</th><th>Status</th><th>Location</th><th>Headed</th><th>Fuel</th><th>Cargo</th></tr>
+  <div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">Fleet (${d.ships.length})</h2></div>
+    <table class="pl-table"><tr><th>Ship</th><th>Role</th><th>Status</th><th>Location</th><th>Headed</th><th>Fuel</th><th>Cargo</th></tr>
     ${ships}</table></div>
-  <div class="card" style="margin-top:14px"><h2>Contracts</h2>
-    <table><tr><th>Type</th><th>Deliver</th><th>To</th><th>Pays</th><th>State</th></tr>${cons}</table></div>
-  <div class="card" style="margin-top:14px"><h2>Learned routes <span style="color:var(--mut);font-weight:400;text-transform:none">— the agent's trade-route memory</span></h2>
-    <table><tr><th>Good</th><th>Buy at</th><th>Sell at</th><th>+/unit</th></tr>${routesRows}</table></div>
-  ${ap.log && ap.log.length?`<div class="card" style="margin-top:14px"><h2>Engine log</h2>
+  <div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">Contracts</h2></div>
+    <table class="pl-table"><tr><th>Type</th><th>Deliver</th><th>To</th><th>Pays</th><th>State</th></tr>${cons}</table></div>
+  <div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">Learned routes</h2><span class="pl-panel-header__kicker">the agent's trade-route memory</span></div>
+    <table class="pl-table"><tr><th>Good</th><th>Buy at</th><th>Sell at</th><th>+/unit</th></tr>${routesRows}</table></div>
+  ${ap.log && ap.log.length?`<div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">Engine log</h2></div>
     <div class="log">${ap.log.map(l=>l.replace(/</g,'&lt;')).join("\n")}</div></div>`:''}
   `;
 }
