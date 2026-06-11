@@ -8,8 +8,10 @@ tools in ``tools.py`` build on it.
 
 Auth: a per-agent **agent token** (bearer). Get one by registering an agent
 (`st_register`, needs an **account token** from your spacetraders.io account),
-or paste an existing one. Resolution order: ``SPACETRADERS_TOKEN`` env →
-``config/spacetraders.token`` (gitignored).
+or paste an existing one. Resolution order: ``SPACETRADERS_TOKEN`` env → in-process
+config (seeded by ``register()``) → this agent's **scoped** ``secrets.yaml`` → the
+legacy ``config/spacetraders.token`` (gitignored). Persistence is per-agent scoped
+so fleet/workspace agents keep their token across reloads (not just the host).
 """
 
 from __future__ import annotations
@@ -64,13 +66,50 @@ def account_token() -> str | None:
     return _CONFIG_ACCOUNT_TOKEN or (os.environ.get("SPACETRADERS_ACCOUNT_TOKEN", "").strip() or None)
 
 
+def _secrets_yaml_path() -> Path:
+    """The THIS-AGENT-scoped ``secrets.yaml`` — the exact file the server seeds the
+    token from at graph build (``register()`` → plugin config). Resolving it is what
+    makes a save survive a reload AND be visible to this agent's own views: a
+    cwd-relative ``config/secrets.yaml`` only happens to be right for the HOST (cwd =
+    repo root); a fleet/workspace agent's scoped secrets live at ``<workspace>/secrets.yaml``,
+    so the old write stranded the token in the host's config and the agent re-seeded
+    from its own (empty) secrets on reload → "no token set"."""
+    try:
+        # The host's resolved, instance-scoped path (graph/config_io). This is the
+        # one the plugin-config layer reads `spacetraders.token` back from.
+        from graph.config_io import SECRETS_YAML_PATH  # type: ignore
+
+        return Path(SECRETS_YAML_PATH)
+    except Exception:  # noqa: BLE001 — running outside the host (tests / fresh_start)
+        cfg = os.environ.get("PROTOAGENT_CONFIG_DIR")
+        return (Path(cfg) if cfg else Path("config")) / "secrets.yaml"
+
+
+def _read_secrets_token() -> str | None:
+    """Read ``spacetraders.token`` straight from the scoped secrets.yaml — the
+    same file ``save_token`` writes, so reads resolve even if the in-memory seed
+    (``register()``) hasn't run in this process."""
+    try:
+        import yaml
+
+        path = _secrets_yaml_path()
+        data = (yaml.safe_load(path.read_text()) if path.exists() else {}) or {}
+        tok = ((data.get("spacetraders") or {}).get("token") or "").strip()
+        return tok or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def load_token() -> str | None:
-    """Resolve the agent token: env → console/config → token file."""
+    """Resolve the agent token: env → in-process config → scoped secrets.yaml → legacy file."""
     tok = os.environ.get("SPACETRADERS_TOKEN", "").strip()
     if tok:
         return tok
     if _CONFIG_TOKEN:
         return _CONFIG_TOKEN
+    tok = _read_secrets_token()
+    if tok:
+        return tok
     try:
         tok = _TOKEN_FILE.read_text().strip()
         return tok or None
@@ -79,22 +118,26 @@ def load_token() -> str | None:
 
 
 def save_token(token: str) -> None:
-    """Persist the active agent token to config/secrets.yaml (the SINGLE source the server
-    reads) AND apply it live in this process (``_CONFIG_TOKEN``) — so a fresh-start or an
-    agent swap takes effect immediately, with one consistent store. Falls back to the legacy
-    token file only if secrets.yaml can't be written (avoids the old file-vs-secrets split)."""
+    """Persist the active agent token to THIS AGENT's scoped ``secrets.yaml`` (the exact
+    file the server seeds from on reload) AND apply it live in this process
+    (``_CONFIG_TOKEN``) — so a fresh-start or agent swap takes effect immediately, with
+    one consistent store that's also visible to this agent's fleet/dashboard views.
+    Falls back to the legacy token file only if secrets.yaml can't be written."""
     global _CONFIG_TOKEN
     token = token.strip()
     _CONFIG_TOKEN = token  # live: this process switches agent right away
     try:
         import yaml
 
-        # cwd-relative (both the server and fresh_start run from the repo root) — robust
-        # against the parents[] resolution that stranded the token under config/config/.
-        path = Path("config/secrets.yaml")
+        path = _secrets_yaml_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
         data = (yaml.safe_load(path.read_text()) if path.exists() else {}) or {}
         data.setdefault("spacetraders", {})["token"] = token
         path.write_text(yaml.safe_dump(data, default_flow_style=False, sort_keys=False))
+        try:
+            path.chmod(0o600)  # secrets file — owner-only (matches the host's writer)
+        except OSError:
+            pass
     except Exception:  # noqa: BLE001 — never lose the token
         _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
         _TOKEN_FILE.write_text(token + "\n")
