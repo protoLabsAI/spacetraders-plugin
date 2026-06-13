@@ -97,9 +97,13 @@ def register(registry) -> None:
         registry.register_goal_hook(on_achieved=_on_goal_achieved)
         log.info("[spacetraders] registered goal hook (stop engine on goal achieved)")
 
-    # Console fleet dashboard (ADR 0026) — rail view at /plugins/spacetraders/*.
-    from .dashboard import build_dashboard_router
+    # Console fleet dashboard (ADR 0026) — TWO routers at DISTINCT prefixes: the
+    # PAGE stays on the public /plugins/spacetraders (an iframe page-load can't
+    # carry a bearer), the /state DATA route mounts under /api/plugins/spacetraders
+    # so it inherits the operator bearer gate (plugin-view rule 2, issue #5).
+    from .dashboard import build_dashboard_router, build_data_router
     registry.register_router(build_dashboard_router())
+    registry.register_router(build_data_router(), prefix="/api/plugins/spacetraders")
 
     for cfg in space_subagents():
         registry.register_subagent(cfg)
