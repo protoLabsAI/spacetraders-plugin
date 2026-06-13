@@ -230,7 +230,14 @@ def build_dashboard_router() -> APIRouter:
 
 
 _PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Fleet</title>
-<link rel="stylesheet" href="/_ds/plugin-kit.css">
+<script>
+  // Slug-aware kit href (protoAgent ADR 0042, plugin-view rule 3): through the fleet
+  // proxy the page lives at /agents/<slug>/plugins/... — a hardcoded /_ds/ resolves
+  // against the hub root. Inject the <link> so the href carries the base. (The data
+  // fetches below are RELATIVE, so they're already slug-safe.)
+  window.__base = location.pathname.split("/plugins/")[0];
+  document.write('<link rel="stylesheet" href="' + window.__base + '/_ds/plugin-kit.css">');
+</script>
 <style>
   html,body{margin:0;height:100%;background:var(--pl-color-bg);color:var(--pl-color-fg);
     font-family:var(--pl-font-sans,ui-sans-serif,system-ui,-apple-system,sans-serif);font-size:14px}
