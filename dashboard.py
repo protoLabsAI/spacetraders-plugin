@@ -216,15 +216,30 @@ async def _snapshot() -> dict:
 
 
 def build_dashboard_router() -> APIRouter:
+    """The PAGE router — stays on the PUBLIC ``/plugins/spacetraders`` prefix: a
+    browser iframe page-load can't carry an Authorization bearer, so a gated page
+    would 401-blank under the token gate (plugin-view rule 2). Everything the page
+    FETCHES is gated (build_data_router)."""
+    router = APIRouter()
+
+    @router.get("/dashboard")
+    async def _dashboard():
+        return HTMLResponse(_PAGE)
+
+    return router
+
+
+def build_data_router() -> APIRouter:
+    """The DATA route — mounted under ``/api/plugins/spacetraders`` so it inherits
+    the operator bearer gate (rule 2, issue #5). Previously ``/state`` lived under
+    the public ``/plugins/`` prefix: on a token-gated deployment anyone who could
+    reach the port could read fleet state (credits, ships, contracts) without the
+    bearer."""
     router = APIRouter()
 
     @router.get("/state")
     async def _state():
         return JSONResponse(await _snapshot())
-
-    @router.get("/dashboard")
-    async def _dashboard():
-        return HTMLResponse(_PAGE)
 
     return router
 
@@ -262,8 +277,16 @@ _PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Fleet</title
   </div>
   <div id="body"></div>
 </div>
-<script>
-let TOKEN = null;
+<script type="module">
+// The DS plugin-kit owns the protoagent:init handshake (bearer + theme, incl. live
+// re-themes onto the --pl-* tokens) and slug-aware authed fetches — replacing the
+// hand-rolled TMAP/listener this page carried. plugin-kit.js is an ES MODULE, so it
+// loads via dynamic import (a classic <script src> throws on its exports; see
+// protoAgent docs/how-to/build-a-plugin-view.md). Older host without /_ds: fall
+// back to a tokenless same-origin shim (fine locally; gated instances serve the kit).
+let kit;
+try { kit = await import(window.__base + "/_ds/plugin-kit.js"); }
+catch (e) { kit = { initPluginView(){}, apiFetch: (p, i) => fetch(window.__base + p, i) }; }
 let MAPCARDS = {};
 let LAST_D = null;  // last polled state — the 1s ticker re-renders the map so in-transit ships glide
 // System-map pan/zoom — the full system spans far outposts, so let the operator explore.
@@ -312,11 +335,6 @@ document.addEventListener("mousemove", e=>{
   const ox = (e.clientX + 16 + 260 > innerWidth) ? e.clientX - 16 - 260 : e.clientX + 16;
   _mc.style.left = ox + "px"; _mc.style.top = (e.clientY + 16) + "px";
 });
-const TMAP={bg:["--pl-color-bg"],bgPanel:["--pl-color-bg-raised","--pl-color-bg-subtle"],fg:["--pl-color-fg"],fgMuted:["--pl-color-fg-muted"],brand:["--pl-color-accent"],border:["--pl-color-border"]};
-function applyTheme(t){const r=document.documentElement;for(const[k,v] of Object.entries(t||{}))(TMAP[k]||(k.startsWith("--pl-")?[k]:[])).forEach(p=>v&&r.style.setProperty(p,v));}
-window.addEventListener("message",(e)=>{const d=e.data||{};
-  if(d.type==="protoagent:init"){if(d.token)TOKEN=d.token;applyTheme(d.theme);}
-  else if(d.type==="protoagent:theme")applyTheme(d.theme);});
 const cr = n => n == null ? "—" : n.toLocaleString() + " cr";
 const stClass = s => ({IN_TRANSIT:"warning",DOCKED:"success",IN_ORBIT:"info"}[s]||"");
 const compact = n => n==null?"—":n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?Math.round(n/1e3)+"k":""+n;
@@ -362,8 +380,7 @@ function renderMap(d){
 }
 async function poll(){
   try{
-    const h = TOKEN ? {Authorization:"Bearer "+TOKEN} : {};
-    const d = await (await fetch("state",{headers:h})).json();
+    const d = await (await kit.apiFetch("/api/plugins/spacetraders/state")).json();
     render(d);
   }catch(e){ document.getElementById("body").innerHTML =
     '<div class="pl-callout pl-callout--error"><div class="pl-callout__body">dashboard offline — '+e+'</div></div>'; }
@@ -411,7 +428,7 @@ function render(d){
     <div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">Universe</h2></div>
       <div class="big" style="font-size:20px">wipe in <span class="wipe" data-next="${srv.next_reset||''}">${dur(srv.next_reset)}</span></div>
       <div class="sub" style="margin-top:4px">${srv.frequency||'?'} reset${srv.next_reset?` · ${new Date(srv.next_reset).toLocaleString()}`:''}</div>
-      <div class="sub" style="margin-top:6px">galaxy: ${(srv.agents||'?').toLocaleString?srv.agents.toLocaleString():srv.agents} agents · ${compact(srv.ships)} ships · ${compact(srv.systems)} systems</div></div>
+      <div class="sub" style="margin-top:6px">galaxy: ${srv.agents!=null?srv.agents.toLocaleString():'?'} agents · ${compact(srv.ships)} ships · ${compact(srv.systems)} systems</div></div>
   </div>
   <div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">System map — ${(d.map||{}).system||''}</h2>
     <span class="pl-panel-header__kicker">◆ ships · ◯ scouted markets · ┄ learned routes</span></div>
@@ -427,7 +444,13 @@ function render(d){
     <div class="log">${ap.log.map(l=>l.replace(/</g,'&lt;')).join("\n")}</div></div>`:''}
   `;
 }
-poll(); setInterval(poll, 8000);
+// Boot ONCE, on whichever fires first: the handshake (normal — the bearer arrives
+// with protoagent:init, so the gated /state poll authenticates), or a short timer
+// for the no-handshake case (standalone page / older host).
+let booted = false;
+function boot(){ if (booted) return; booted = true; poll(); setInterval(poll, 8000); }
+kit.initPluginView(boot);
+setTimeout(boot, 800);
 // Tick the countdowns every second between polls, and re-render the map so in-transit
 // ships glide along their routes (re-interpolated against the current time).
 setInterval(()=>{
