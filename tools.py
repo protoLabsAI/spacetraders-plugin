@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from langchain_core.tools import tool
 
-from .client import SpaceTradersError, call, save_token
+from .client import SpaceTradersError, call
 
 # Active surveys per ship, cached so st_extract can target a deposit. Surveys
 # expire server-side (a few minutes); we filter expired ones lazily on use.
@@ -113,20 +113,22 @@ async def st_register(symbol: str, faction: str = "COSMIC", account_token: str =
         faction: starting faction enum.
         account_token: your account bearer token (required to register).
     """
-    from .client import account_token as _config_account_token
+    from .client import account_token as _config_account_token, register_agent
     tok = (account_token or "").strip() or _config_account_token()
     if not tok:
         return ("Error: registration needs an account token. Create an account at "
                 "spacetraders.io and paste its account token in the console "
                 "(System → Settings → SpaceTraders → Account token), or pass it as account_token.")
     try:
-        data = await call("POST", "/register", token=tok,
-                          json={"symbol": symbol, "faction": faction})
+        # register_agent saves the returned agent token (live + secrets) AND the call
+        # sign, so every later call — and reset-recovery — uses the fresh token.
+        data = await register_agent(symbol, faction, tok)
     except SpaceTradersError as e:
+        if getattr(e, "code", None) == 4111:
+            return (f"Error: call sign {symbol!r} is already claimed — choose a different one "
+                    f"(3–14 chars, A–Z/0–9/_/-). After a universe reset your old call sign is "
+                    f"usually free again; if it's still taken, try a variant like {symbol}2.")
         return f"Error: {e}"
-    agent_token = data.get("token", "")
-    if agent_token:
-        save_token(agent_token)
     ag = data.get("agent", {})
     ships = data.get("ships") or ([data["ship"]] if "ship" in data else [])
     contract = data.get("contract", {})
@@ -135,6 +137,18 @@ async def st_register(symbol: str, faction: str = "COSMIC", account_token: str =
         f"HQ {ag.get('headquarters')}. Starting ships: {', '.join(s['symbol'] for s in ships)}. "
         f"First contract: {contract.get('id', 'none')}. Agent token saved."
     )
+
+
+@tool
+async def st_recover_token() -> str:
+    """Recover from a SpaceTraders universe reset (error 4113 "token reset_date does
+    not match"). Re-registers your CONFIGURED call sign with your account token and
+    saves the fresh agent token automatically — call this when a tool reports the
+    token is from a previous reset. If your call sign is now claimed, register a new
+    one with st_register instead.
+    """
+    from .client import recover_from_reset
+    return await recover_from_reset()
 
 
 @tool
@@ -1014,7 +1028,7 @@ def _harden(tools: list) -> list:
 
 def get_spacetraders_tools() -> list:
     return _harden([
-        st_register, st_agent, st_fleet, st_autopilot_status,
+        st_register, st_recover_token, st_agent, st_fleet, st_autopilot_status,
         st_autopilot_start, st_autopilot_stop, st_knobs, st_tune, st_ship,
         st_orbit, st_dock, st_navigate, st_travel, st_plan_route, st_refuel,
         st_transfer, st_shipyard, st_buy_ship,

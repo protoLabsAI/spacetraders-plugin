@@ -787,6 +787,7 @@ async def _watchdog() -> None:
     frozen = 0
     last_loglen = -1
     rekicks = 0
+    recovered_reset = False   # one auto-recovery attempt per down-streak
     while True:
         try:
             await asyncio.sleep(_WD_INTERVAL)
@@ -795,7 +796,25 @@ async def _watchdog() -> None:
                 continue
             # (1) crashed / stopped while we want it running → re-kick
             if not _engine_running():
-                err = (_OPS.get("result") or {}).get("error")
+                err = (_OPS.get("result") or {}).get("error") or ""
+                # A universe reset kills the token — every re-kick just crashes
+                # again on 4113. Auto-recover ONCE per down-streak: re-register the
+                # configured call sign for a fresh token, then re-kick. If we can't
+                # (no account token / call sign now claimed), stop wanting-running
+                # so we don't spin — the operator re-registers a new call sign.
+                if ("4113" in err or "reset_date" in err) and not recovered_reset:
+                    recovered_reset = True
+                    try:
+                        status = await C.recover_from_reset()
+                    except Exception as e:  # noqa: BLE001
+                        status = f"reset recovery errored: {e}"
+                    _wd_log(f"universe reset — {status}")
+                    if status.startswith("re-registered"):
+                        start_ops(_OPS.get("started_minutes") or 15.0)
+                        frozen = 0
+                        continue
+                    _OPS["want_running"] = False   # can't auto-recover → stop the storm
+                    continue
                 rekicks += 1
                 _wd_log(f"engine down ({err or 'stopped'}) — re-kick #{rekicks}")
                 if rekicks == 5:
@@ -804,6 +823,7 @@ async def _watchdog() -> None:
                 frozen = 0
                 continue
             rekicks = 0
+            recovered_reset = False   # engine healthy again → re-arm reset recovery
             # (2) running but its log is frozen → possible stall. Only act if NO ship is in
             #     transit (a long DRIFT legitimately freezes the log) — else don't false-trip.
             loglen = len(_OPS.get("log", []))

@@ -1,6 +1,6 @@
 id: spacetraders
 name: SpaceTraders
-version: 1.1.0
+version: 1.2.0
 description: >-
   Play the live SpaceTraders v2 API (https://spacetraders.io) — a persistent,
   shared galactic economy. A FULL-BUNDLE plugin (ADR 0027): 30 fleet/market/mining/
