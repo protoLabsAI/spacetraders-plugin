@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 
 from . import client as C
+from . import roles as R
 from . import tools as T
 
 
@@ -286,26 +287,40 @@ async def job_mining(sym: str, asteroid: str, ore: str, sell_wp: str, *, log=Non
 
 async def _good_price(wp: str, good: str) -> tuple:
     """(purchasePrice, sellPrice) for ``good`` at ``wp`` — needs a ship present; (None, None) if unknown."""
+    p, s, _ = await _good_quote(wp, good)
+    return (p, s)
+
+
+async def _good_quote(wp: str, good: str) -> tuple:
+    """(purchasePrice, sellPrice, tradeVolume) for ``good`` at ``wp`` — needs a ship present;
+    (None, None, None) if unknown. tradeVolume is the per-transaction cap the saturation
+    guard sizes a delivery against."""
     try:
         m = await C.call("GET", f"/systems/{T._system_of(wp)}/waypoints/{wp}/market")
         g = next((x for x in m.get("tradeGoods", []) if x["symbol"] == good), None)
-        return (g.get("purchasePrice"), g.get("sellPrice")) if g else (None, None)
+        return (g.get("purchasePrice"), g.get("sellPrice"), g.get("tradeVolume")) if g else (None, None, None)
     except C.SpaceTradersError:
-        return (None, None)
+        return (None, None, None)
 
 
 async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *, log=None) -> str:
-    """One buy-low / sell-high round trip for a good — only if the spread is positive."""
+    """One buy-low / sell-high round trip for a good — only if the spread is positive, and
+    sized so it doesn't crash the sink: buy at most ``sink_volume_mult × (sink tradeVolume)``,
+    so one delivery moves the import price ~one tier-step instead of cratering it (the #1
+    way an unattended bot kills its own routes). Raise sink_volume_mult for a thin fleet."""
     cap = (await _ship(sym))["cargo"]["capacity"]
     await travel_to(sym, buy_wp, log=log)
     # Profitability guard: confirm sell (at sell_wp) > buy (here) before committing.
     buy_price, _ = await _good_price(buy_wp, good)
-    _, sell_price = await _good_price(sell_wp, good)
+    _, sell_price, sell_vol = await _good_quote(sell_wp, good)
     if buy_price and sell_price and sell_price <= buy_price:
         return (f"skipped {good} trade: buy {buy_price} ≥ sell {sell_price} "
                 f"({buy_wp}→{sell_wp}) — no margin, would lose money")
+    target = cap
+    if sell_vol:                                  # saturation cap — keep a delivery ≈ one tier-step
+        target = min(cap, max(1, round(_SINK_VOLUME_MULT * sell_vol)))
     await _dump_except(sym, good, log=log)
-    await _buy(sym, good, cap, max_price=sell_price, log=log)
+    await _buy(sym, good, target, max_price=sell_price, log=log)
     held = await _held(sym, good)
     if held == 0:
         return f"could not buy {good} at {buy_wp} (or price ≥ resale — guarded)"
@@ -462,13 +477,51 @@ _PROBE_BUFFER = 150_000  # keep a healthy reserve before scouting-buys. 80k was 
                          # (PROTORUN3 bled ~115k before contracts/trade could cover it)
 _MAP_TARGET = 8         # markets to have in the price map before arbitrage surfaces
 _MAX_PROBES = 5         # enough parallel scouts
-_ROUTE_CACHE: dict = {"at": -1e9, "route": None}
+# --- control-surface knobs (the OODA strategist's dials; ADR two-loop-fleet) ----------
+_RESERVE_FLOOR = 0      # HARD credit floor — never let an auto-buy take credits below this
+                        # (0 = off; the strategist raises it to protect a cash cushion)
+_WINDOW_MINUTES = 15.0  # autopilot window length; lower = tighter OODA cadence between turns
+_SINK_VOLUME_MULT = 1.0  # saturation cap: sell at most mult×(sink tradeVolume) per visit, so
+                         # one delivery moves the price ~one tier-step instead of cratering it
+_SINK_SUPPLY_CUTOFF = "ABUNDANT"  # skip importers already saturated at/above this supply tier
+_ROUTE_DIVERSIFY = 1    # 1 = spread haulers across the top-N routes (anti-saturation); 0 = all
+                        # on the single best route (legacy behaviour)
+_ROUTE_CACHE: dict = {"at": -1e9, "routes": []}
 
 # Runtime-tunable engine knobs (the strategist adjusts these from its research/audit —
-# e.g. lower min_margin to surface routes in a thin market). The engine reads the module
-# globals at call time, so set_knob takes effect on the running autopilot immediately.
+# e.g. lower min_margin to surface routes in a thin market, or raise reserve_floor to keep a
+# cash cushion). The engine reads the module globals at CALL TIME, so set_knob takes effect
+# on the running autopilot immediately — that's what lets the outer OODA loop steer it live.
 _TUNABLE = {"min_margin": "_MIN_MARGIN", "buy_buffer": "_BUY_BUFFER", "max_ships": "_MAX_SHIPS",
-            "probe_buffer": "_PROBE_BUFFER", "map_target": "_MAP_TARGET", "max_probes": "_MAX_PROBES"}
+            "probe_buffer": "_PROBE_BUFFER", "map_target": "_MAP_TARGET", "max_probes": "_MAX_PROBES",
+            "reserve_floor": "_RESERVE_FLOOR", "window_minutes": "_WINDOW_MINUTES",
+            "sink_volume_mult": "_SINK_VOLUME_MULT", "sink_supply_cutoff": "_SINK_SUPPLY_CUTOFF",
+            "route_diversify": "_ROUTE_DIVERSIFY"}
+
+# Captured ONCE at import (before any set_knob mutation) so a strategy switch can reset
+# knobs to defaults instead of accumulating overrides across presets.
+_DEFAULT_KNOBS = {k: globals()[v] for k, v in _TUNABLE.items()}
+
+# Strategy preset + per-ship role pins — the macro and fine-grained halves of the control
+# surface. autopilot reads both each window (strategy.py / roles.py define the policy).
+_STRATEGY: dict = {"name": "balanced", "mining": True}
+_OVERRIDES: dict = {}   # {ship_symbol: role} from st_assign
+
+# Decision log — every control-surface change (strategy / knob / pin) the OODA strategist
+# makes, capped + newest-last. This is the audit trail for unattended runs: it lets the
+# showcase dashboard + st_report show WHAT the agent changed and the engine reconstruct its
+# own decision history. Records WHO (caller passes a reason) + the before→after.
+_DECISIONS: list = []
+
+
+def _log_decision(action: str, detail: str) -> None:
+    _DECISIONS.append({"action": action, "detail": detail})
+    del _DECISIONS[:-40]   # keep the last 40
+
+
+def decisions() -> list:
+    """The recent control-surface decision log (for st_report / the dashboard)."""
+    return list(_DECISIONS)
 
 
 def knobs() -> dict:
@@ -477,39 +530,98 @@ def knobs() -> dict:
     return {k: g[v] for k, v in _TUNABLE.items()}
 
 
-def set_knob(name: str, value: float) -> str:
-    """Override an engine knob at runtime (bounded 'tune' authority — reversible)."""
+def _coerce_knob(old, value):
+    """Coerce a tuned ``value`` to the knob's existing type — accepts numbers-as-strings
+    ('300000') and bare strings (supply tiers like 'HIGH'); ints tolerate '3.0'."""
+    if isinstance(old, bool):
+        return str(value).strip().lower() in {"1", "true", "on", "yes"}
+    if isinstance(old, int):
+        return int(float(value))
+    if isinstance(old, float):
+        return float(value)
+    return str(value)
+
+
+def set_knob(name: str, value) -> str:
+    """Override an engine knob at runtime (bounded 'tune' authority — reversible). Type is
+    coerced to the knob's default type, so the agent may pass numbers or strings."""
     key = (name or "").lower()
     if key not in _TUNABLE:
         return f"unknown knob {name!r}; tunable: {', '.join(_TUNABLE)}"
     g = globals(); var = _TUNABLE[key]
     old = g[var]
-    g[var] = type(old)(value)
+    try:
+        g[var] = _coerce_knob(old, value)
+    except (TypeError, ValueError):
+        return f"bad value {value!r} for {key} (expected {type(old).__name__})"
+    if g[var] != old:
+        _log_decision("tune", f"{key}: {old} → {g[var]}")
     return f"tuned {key}: {old} -> {g[var]}"
 
 
-async def _best_trade_route(system: str, market_wps: list) -> dict | None:
-    """The best CURRENTLY-profitable arbitrage route from markets with live prices
-    (a ship present unlocks prices). Cached 60s — scanning every market is costly."""
+def reset_knobs() -> None:
+    """Restore every knob to its import-time default (used when switching strategy)."""
+    g = globals()
+    for k, var in _TUNABLE.items():
+        g[var] = _DEFAULT_KNOBS[k]
+
+
+def current_strategy() -> dict:
+    """The active strategy preset + mining flag (for st_report / st_strategy)."""
+    return dict(_STRATEGY)
+
+
+def apply_strategy(name: str) -> str:
+    """Switch the engine to a named strategy preset (strategy.py): reset knobs to defaults,
+    apply the preset's overrides, and record its mining flag for autopilot. Takes effect on
+    the running engine from the next window."""
+    from . import strategy as _strat
+    preset = _strat.resolve(name)
+    if not preset:
+        return f"unknown strategy {name!r}; available: {', '.join(_strat.names())}"
+    reset_knobs()
+    for k, v in preset["knobs"].items():
+        set_knob(k, v)
+    _STRATEGY.update(name=preset["name"], mining=preset["mining"])
+    _log_decision("strategy", f"→ {preset['name']} (mining {'on' if preset['mining'] else 'off'})")
+    return (f"strategy → {preset['name']} ({preset['blurb']}) · mining "
+            f"{'on' if preset['mining'] else 'off'} · knobs now {knobs()}")
+
+
+def set_override(ship: str, role: str) -> str:
+    """Pin a ship to a role (st_assign): mine|trade|contract|scout|idle, or auto to clear.
+    The pin beats the auto-classifier on the next window (roles.assign_roles)."""
+    from . import roles as _roles
+    sym = (ship or "").upper()
+    r = (role or "").lower()
+    if r not in _roles.ROLE_NAMES:
+        return f"unknown role {role!r}; valid: {', '.join(sorted(_roles.ROLE_NAMES))}"
+    if r == "auto":
+        _OVERRIDES.pop(sym, None)
+        _log_decision("assign", f"{sym} → auto (pin cleared)")
+        return f"{sym}: override cleared → auto-classified"
+    _OVERRIDES[sym] = r
+    _log_decision("assign", f"{sym} → {r}")
+    return f"{sym}: pinned → {r} (overrides auto-classification next window)"
+
+
+def overrides() -> dict:
+    """The current per-ship role pins (for st_report / audit)."""
+    return dict(_OVERRIDES)
+
+
+async def _ranked_routes(system: str, market_wps: list) -> list:
+    """All currently-profitable arbitrage routes, ranked best-first (a ship present unlocks
+    live prices). Cached 60s — scanning every market is costly. Returns a LIST so several
+    haulers can diversify across the top-N (anti-saturation) instead of stacking on one."""
     now = _now()
-    if _ROUTE_CACHE["route"] is not None and now - _ROUTE_CACHE["at"] < 60:
-        return _ROUTE_CACHE["route"]
-    from . import routes
-    # Memory fast-path: re-verify a REMEMBERED route's live prices before scanning the
-    # whole system. The agent learns routes over time, so this gets cheaper each window.
-    for r in routes.recall_routes(system):
-        buy_price, _ = await _good_price(r["buy_at"], r["good"])
-        _, sell_price = await _good_price(r["sell_at"], r["good"])
-        if buy_price and sell_price and (sell_price - buy_price) >= _MIN_MARGIN:
-            route = {"good": r["good"], "buy_at": r["buy_at"], "sell_at": r["sell_at"],
-                     "profit_per_unit": sell_price - buy_price}
-            _ROUTE_CACHE.update(at=now, route=route)
-            return route
-    # Refresh the persistent PRICE MAP for any currently-lit markets, then run arbitrage
+    if _ROUTE_CACHE["routes"] and now - _ROUTE_CACHE["at"] < 60:
+        return _ROUTE_CACHE["routes"]
+    from . import prices, routes
+    from .analysis import rank_routes
+    # Refresh the persistent PRICE MAP for any currently-lit markets, then rank arbitrage
     # over the RECORDED map (built up as probes sweep the system) — not just what's lit
-    # right now, which is almost never two markets at once. This is what makes spatial
-    # arbitrage actually work, and REMEMBER the best so the agent recalls it next wipe.
-    from . import prices
+    # right now, which is almost never two markets at once. REMEMBER the best for next wipe.
     for wp in market_wps:
         try:
             m = await C.call("GET", f"/systems/{system}/waypoints/{wp}/market")
@@ -517,22 +629,34 @@ async def _best_trade_route(system: str, market_wps: list) -> dict | None:
             continue
         if m.get("tradeGoods"):
             prices.record_market(system, wp, m["tradeGoods"])
-    from .analysis import best_route
-    best = best_route(prices.price_map(system), min_margin=_MIN_MARGIN)
-    route = best if best and best.get("profit_per_unit", 0) >= _MIN_MARGIN else None
-    if route:
-        routes.remember_route(system, route["good"], route["buy_at"],
-                              route["sell_at"], route["profit_per_unit"])
-    _ROUTE_CACHE.update(at=now, route=route)
-    return route
+    ranked = rank_routes(prices.price_map(system), min_margin=_MIN_MARGIN,
+                         sink_supply_cutoff=_SINK_SUPPLY_CUTOFF)
+    if ranked:
+        top = ranked[0]
+        routes.remember_route(system, top["good"], top["buy_at"], top["sell_at"],
+                              top["profit_per_unit"])
+    _ROUTE_CACHE.update(at=now, routes=ranked)
+    return ranked
 
 
-async def _trade_loop(sym: str, deadline: float, system: str, market_wps: list, *, log=None) -> str:
-    """A cargo ship: run the best profitable arbitrage route, re-evaluating each round
-    so it adapts when a market saturates. job_trade is spread-guarded (no loss legs)."""
+async def _best_trade_route(system: str, market_wps: list, rank: int = 0) -> dict | None:
+    """The ``rank``-th best profitable route (0 = best). With route_diversify on, each
+    hauler is handed a different rank so they spread across the top-N rather than all
+    pile onto the single best route and saturate it."""
+    ranked = await _ranked_routes(system, market_wps)
+    if not ranked:
+        return None
+    return ranked[min(rank, len(ranked) - 1)]
+
+
+async def _trade_loop(sym: str, deadline: float, system: str, market_wps: list,
+                      *, rank: int = 0, log=None) -> str:
+    """A cargo ship: run a profitable arbitrage route (its diversify ``rank``), re-evaluating
+    each round so it adapts when a market saturates. job_trade is spread-guarded + sized to
+    the sink's tradeVolume (no loss legs, no self-crash)."""
     runs = 0
     while _now() < deadline:
-        route = await _best_trade_route(system, market_wps)
+        route = await _best_trade_route(system, market_wps, rank=rank)
         if not route:
             await asyncio.sleep(15)           # wait for probes to scout a profitable spread
             continue
@@ -592,6 +716,8 @@ async def _maybe_reinvest(ships: list, system: str, *, log=None) -> None:
     covered and capital is comfortable."""
     if len(ships) >= _MAX_SHIPS:
         return
+    if await _credits() < _RESERVE_FLOOR:   # hard cash floor — protect the cushion
+        return
     from . import prices
     coverage = prices.stats(system).get("markets", 0)
     probes = sum(1 for s in ships if s["fuel"].get("capacity", 0) == 0)
@@ -631,13 +757,47 @@ async def _maybe_buy_hauler(ships: list, system: str, *, log=None) -> None:
             log(f"reinvest skipped: {e}")
 
 
+async def _mining_targets(system: str) -> tuple | None:
+    """Find a mineable asteroid + the nearest market to sell ore at, in ``system``.
+
+    Returns ``(asteroid_wp, sell_market_wp)`` or ``None`` if the system has no asteroid
+    or no market — in which case a miner falls back to trade rather than being stranded
+    at a rock with nowhere to sell. Prefers an ENGINEERED_ASTEROID (the designated
+    mining hub) over a raw field/asteroid, and picks the market closest to it by x,y so
+    each extract→sell round trip is short. Queried by type/trait like the rest of the
+    engine (cf. the SHIPYARD/MARKETPLACE scans)."""
+    async def _of_type(t: str) -> list:
+        try:
+            return await C.call("GET", f"/systems/{system}/waypoints",
+                                params={"type": t, "limit": 20})
+        except C.SpaceTradersError:
+            return []
+    asteroids = (await _of_type("ENGINEERED_ASTEROID")
+                 or await _of_type("ASTEROID_FIELD")
+                 or await _of_type("ASTEROID"))
+    if not asteroids:
+        return None
+    try:
+        markets = await C.call("GET", f"/systems/{system}/waypoints",
+                               params={"traits": "MARKETPLACE", "limit": 20})
+    except C.SpaceTradersError:
+        return None
+    if not markets:
+        return None
+    ast = asteroids[0]
+    nearest = min(markets, key=lambda w: (w.get("x", 0) - ast.get("x", 0)) ** 2
+                  + (w.get("y", 0) - ast.get("y", 0)) ** 2)
+    return ast["symbol"], nearest["symbol"]
+
+
 async def autopilot(minutes: float, *, log=None) -> dict:
     """Run the fleet toward max credits for ``minutes`` — the zero-to-million engine.
-    Contracts are per-AGENT (one active), so ONE cargo ship works contracts (the
-    capital base) while the OTHERS run profitable trade routes (the scaling lever,
-    each independent + spread-guarded); probes scout markets for price intel; profit
-    is reinvested into haulers when capital allows. One shared rate budget. Returns a
-    credits/hr summary + per-ship results."""
+    Contracts are per-AGENT (one active), so ONE trader works contracts (the capital
+    base) while the OTHERS run profitable trade routes (the scaling lever, each
+    independent + spread-guarded); ships with a mining laser run the extract→sell loop
+    at the nearest asteroid; probes scout markets for price intel; profit is reinvested
+    into haulers when capital allows. One shared rate budget. Returns a credits/hr
+    summary + per-ship results."""
     start_credits = await _credits()
     deadline = _now() + minutes * 60.0
     ships = await C.call("GET", "/my/ships")
@@ -651,29 +811,48 @@ async def autopilot(minutes: float, *, log=None) -> dict:
                            params={"traits": "MARKETPLACE", "limit": 20})
         market_wps = [w["symbol"] for w in wps]
 
-    # Growth engine (zero-to-million): reinvest profit first, then assign by role.
+    # Growth engine (zero-to-million): reinvest profit first, then assign by role
+    # (roles.assign_roles — classified by CAPABILITY, not just "has a hold"):
     #   • probes SCOUT markets — free, and it builds the price map trade needs;
-    #   • ONE cargo ship works CONTRACTS (the capital base — capped at 1/agent);
-    #   • every OTHER cargo ship runs the best profitable TRADE route (the scaling
-    #     lever — independent + spread-guarded; idles, never loses, if none yet).
+    #   • MINERS (a mining laser) run the survey→extract→sell loop at the nearest
+    #     asteroid — a dedicated mining drone finally mines instead of being mis-cast
+    #     as a hauler (its 15-unit hold used to sweep it into the trade rotation);
+    #   • ONE trader works CONTRACTS (the capital base — capped at 1/agent);
+    #   • every OTHER trader runs the best profitable TRADE route (the scaling lever
+    #     — independent + spread-guarded; idles, never loses, if none yet).
     if system:
         await _maybe_reinvest(ships, system, log=log)   # probes to fill the map, then haulers
         ships = await C.call("GET", "/my/ships")   # refresh after a possible buy
     jobs = {}
-    cargo_ships = [s for s in ships if s["cargo"]["capacity"] > 0]
-    probes = [s for s in ships if s["cargo"]["capacity"] == 0]
+    # Strategy preset (mining on/off) + per-ship pins (st_assign) drive the split.
+    role = R.assign_roles(ships, mining_enabled=_STRATEGY["mining"], overrides=_OVERRIDES)
+    probes, miners, traders = role["probes"], role["miners"], role["traders"]
     # Spread probes ACROSS the markets (round-robin) so they cover ground instead of
     # all clustering on the first few — that's what fills the price map fast.
     for i, p in enumerate(probes):
         if market_wps:
             share = market_wps[i::len(probes)] or market_wps
             jobs[p["symbol"]] = job_scout(p["symbol"], share, deadline, log=log)
-    if cargo_ships:
-        jobs[cargo_ships[0]["symbol"]] = _contract_then_trade(
-            cargo_ships[0]["symbol"], deadline, claimed, lock, system, market_wps, log=log)
-        for s in cargo_ships[1:]:
-            if system and market_wps:
+    # Miners dig at the nearest asteroid and sell the ore. If the system has no asteroid
+    # (or no market for it), fall back to trade so the ship still earns — never stranded.
+    if miners:
+        targets = await _mining_targets(system) if system else None
+        for s in miners:
+            if targets:
+                jobs[s["symbol"]] = _mining_loop(
+                    s["symbol"], deadline, targets[0], targets[1], log=log)
+            elif system and market_wps:
                 jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps, log=log)
+    if traders:
+        jobs[traders[0]["symbol"]] = _contract_then_trade(
+            traders[0]["symbol"], deadline, claimed, lock, system, market_wps, log=log)
+        # Diversify haulers across the top-N routes (rank by position) when route_diversify
+        # is on, so they don't all stack on the single best route and saturate it.
+        for i, s in enumerate(traders[1:], start=1):
+            if system and market_wps:
+                rank = i if _ROUTE_DIVERSIFY else 0
+                jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps,
+                                                rank=rank, log=log)
 
     results = await run_fleet(jobs, log=log)
     end_credits = await _credits()
@@ -708,7 +887,11 @@ async def _run_ops(minutes: float) -> None:
     _OPS["stop"] = False
     try:
         while not _OPS["stop"]:
-            _OPS["result"] = await autopilot(minutes, log=lambda m: _OPS["log"].append(m))
+            # Read the window length from the knob each loop, so the OODA strategist can
+            # tighten/loosen the cadence live (st_tune window_minutes) — the engine picks
+            # the new window up on the very next iteration.
+            win = _WINDOW_MINUTES or minutes
+            _OPS["result"] = await autopilot(win, log=lambda m: _OPS["log"].append(m))
             await asyncio.sleep(3)   # a breath between windows
         _OPS["log"].append("engine wound down (goal reached or operator stop)")
     except asyncio.CancelledError:
@@ -734,6 +917,7 @@ def start_ops(minutes: float) -> str:
     if task is not None and not task.done():
         return "Fleet ops already running — check status before starting another."
     _OPS["started_minutes"] = minutes
+    set_knob("window_minutes", minutes)   # seed the tunable so st_report/st_tune agree
     _OPS["result"] = None
     _OPS["task"] = asyncio.create_task(_run_ops(minutes))
     return (f"Fleet ops started in the background for ~{minutes:g} min. The whole "
@@ -863,4 +1047,76 @@ def ops_status() -> dict:
         "recent_log": _OPS.get("log", [])[-6:],
         "watchdog_log": _OPS.get("wd_log", [])[-5:],
         "result": _OPS.get("result"),
+    }
+
+
+def _eta_hours(credits: int, per_hour: float, target: int):
+    """Hours to ``target`` credits at the current rate, or None if already there / idle."""
+    if per_hour <= 0 or credits >= target:
+        return None
+    return round((target - credits) / per_hour, 1)
+
+
+async def report() -> dict:
+    """Rich fleet telemetry for the OODA strategist's OBSERVE step — credits/hr trajectory,
+    per-ship role + health, engine state, the live knobs + strategy + pins, and a few
+    deterministic HINTS (stranded ships, idle capital, dead routes) to seed ORIENT. Costs
+    one /my/agent + one /my/ships call; everything else is local engine state."""
+    try:
+        agent = await C.call("GET", "/my/agent")
+        ships = await C.call("GET", "/my/ships", params={"limit": 20})
+    except C.SpaceTradersError as e:
+        return {"ok": False, "error": str(e)}
+    credits = agent.get("credits", 0)
+    ops = ops_status()
+    last = ops.get("result") or {}
+    per_hour = last.get("per_hour", 0) or 0
+
+    # Label each ship with the role the engine WOULD assign it this window (same call the
+    # autopilot makes), so the report and the engine never disagree.
+    role = R.assign_roles(ships, mining_enabled=_STRATEGY["mining"], overrides=_OVERRIDES)
+    label = {}
+    for p in role["probes"]:
+        label[p["symbol"]] = "scout"
+    for m in role["miners"]:
+        label[m["symbol"]] = "miner"
+    for i, t in enumerate(role["traders"]):
+        label[t["symbol"]] = "contract" if i == 0 else "trader"
+
+    rows, hints = [], []
+    for s in ships:
+        sym, nav, cargo = s["symbol"], s["nav"], s["cargo"]
+        units, cap = cargo.get("units", 0), cargo.get("capacity", 0)
+        in_transit = nav["status"] == "IN_TRANSIT"
+        r = label.get(sym) or ("idle" if sym in _OVERRIDES else "—")
+        stranded = (not in_transit) and cap > 0 and units >= cap   # parked with a full hold
+        rows.append({"symbol": sym, "role": r, "pinned": _OVERRIDES.get(sym),
+                     "status": nav["status"], "at": nav["waypointSymbol"],
+                     "cargo": f"{units}/{cap}", "stranded": stranded})
+        if stranded:
+            hints.append(f"{sym} parked FULL ({units}/{cap}) at {nav['waypointSymbol']} — may be stranded")
+
+    if ops["running"] and last and per_hour <= 0:
+        hints.append("engine not earning this window — check routes/saturation or lower min_margin")
+    if credits >= _BUY_BUFFER and len(ships) < _MAX_SHIPS and ops["running"]:
+        hints.append(f"{credits:,} cr idle with room to grow — reinvest (buy_buffer {_BUY_BUFFER:,})")
+    if not _ROUTE_CACHE.get("routes") and any(v in ("trader", "contract") for v in label.values()):
+        hints.append("no profitable route mapped — scout more markets or lower min_margin")
+
+    return {
+        "ok": True,
+        "credits": credits,
+        "ships": len(ships),
+        "strategy": _STRATEGY["name"],
+        "mining": _STRATEGY["mining"],
+        "engine": {"running": ops["running"], "window_min": _WINDOW_MINUTES,
+                   "last_gained": last.get("gained"), "per_hour": per_hour,
+                   "recent_log": ops["recent_log"][-4:]},
+        "projection": {"to_250k": _eta_hours(credits, per_hour, 250_000),
+                       "to_1m": _eta_hours(credits, per_hour, 1_000_000)},
+        "knobs": knobs(),
+        "overrides": overrides(),
+        "fleet": rows,
+        "hints": hints,
+        "decisions": _DECISIONS[-6:],
     }
