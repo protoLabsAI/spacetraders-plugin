@@ -19,6 +19,13 @@ import asyncio
 from . import client as C
 from . import roles as R
 from . import tools as T
+# Control surface (knobs + presets + per-ship pins + decision log) on the shared protoAgent
+# SDK helpers — see knobs.py. Imports graph.sdk transitively, so fleet only loads at runtime
+# (when the engine starts), not at plugin-register time. The engine reads KNOBS.get(...) live.
+from .knobs import (  # noqa: F401
+    DLOG, KNOBS, apply_strategy, current_strategy, decisions, knobs,
+    overrides, set_knob, set_override,
+)
 
 
 async def _ship(sym: str) -> dict:
@@ -318,7 +325,7 @@ async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *, log=None)
                 f"({buy_wp}→{sell_wp}) — no margin, would lose money")
     target = cap
     if sell_vol:                                  # saturation cap — keep a delivery ≈ one tier-step
-        target = min(cap, max(1, round(_SINK_VOLUME_MULT * sell_vol)))
+        target = min(cap, max(1, round(KNOBS.get("sink_volume_mult") * sell_vol)))
     await _dump_except(sym, good, log=log)
     await _buy(sym, good, target, max_price=sell_price, log=log)
     held = await _held(sym, good)
@@ -466,148 +473,10 @@ async def _mining_loop(sym: str, deadline: float, asteroid: str, market: str, *,
     return f"{runs} mining run(s), +{earned:,} cr"
 
 
-# Growth-engine knobs (zero-to-million doctrine): contracts seed, trade compounds.
-_MIN_MARGIN = 30        # cr/unit FLOOR below which even a supply-chain route isn't worth
-                        # the fuel; best_route's margin×tradeVolume scoring does the real
-                        # selection (a 10% route moving 60 units beats a 50% one capped at 5)
-_BUY_BUFFER = 600_000   # only reinvest in a hauler when this comfortable (cost ~290k)
-_MAX_SHIPS = 8          # cap auto-bought fleet size
-_PROBE_BUFFER = 150_000  # keep a healthy reserve before scouting-buys. 80k was too low —
-                         # the engine drained the treasury to ~80k buying 5 probes fast
-                         # (PROTORUN3 bled ~115k before contracts/trade could cover it)
-_MAP_TARGET = 8         # markets to have in the price map before arbitrage surfaces
-_MAX_PROBES = 5         # enough parallel scouts
-# --- control-surface knobs (the OODA strategist's dials; ADR two-loop-fleet) ----------
-_RESERVE_FLOOR = 0      # HARD credit floor — never let an auto-buy take credits below this
-                        # (0 = off; the strategist raises it to protect a cash cushion)
-_WINDOW_MINUTES = 15.0  # autopilot window length; lower = tighter OODA cadence between turns
-_SINK_VOLUME_MULT = 1.0  # saturation cap: sell at most mult×(sink tradeVolume) per visit, so
-                         # one delivery moves the price ~one tier-step instead of cratering it
-_SINK_SUPPLY_CUTOFF = "ABUNDANT"  # skip importers already saturated at/above this supply tier
-_ROUTE_DIVERSIFY = 1    # 1 = spread haulers across the top-N routes (anti-saturation); 0 = all
-                        # on the single best route (legacy behaviour)
+# Engine route cache — the ranked trade routes, refreshed each window (a ship present at a
+# market unlocks live prices). The control surface (knobs/presets/pins/decision-log) moved to
+# knobs.py on the shared SDK helpers and is imported at the top of this module.
 _ROUTE_CACHE: dict = {"at": -1e9, "routes": []}
-
-# Runtime-tunable engine knobs (the strategist adjusts these from its research/audit —
-# e.g. lower min_margin to surface routes in a thin market, or raise reserve_floor to keep a
-# cash cushion). The engine reads the module globals at CALL TIME, so set_knob takes effect
-# on the running autopilot immediately — that's what lets the outer OODA loop steer it live.
-_TUNABLE = {"min_margin": "_MIN_MARGIN", "buy_buffer": "_BUY_BUFFER", "max_ships": "_MAX_SHIPS",
-            "probe_buffer": "_PROBE_BUFFER", "map_target": "_MAP_TARGET", "max_probes": "_MAX_PROBES",
-            "reserve_floor": "_RESERVE_FLOOR", "window_minutes": "_WINDOW_MINUTES",
-            "sink_volume_mult": "_SINK_VOLUME_MULT", "sink_supply_cutoff": "_SINK_SUPPLY_CUTOFF",
-            "route_diversify": "_ROUTE_DIVERSIFY"}
-
-# Captured ONCE at import (before any set_knob mutation) so a strategy switch can reset
-# knobs to defaults instead of accumulating overrides across presets.
-_DEFAULT_KNOBS = {k: globals()[v] for k, v in _TUNABLE.items()}
-
-# Strategy preset + per-ship role pins — the macro and fine-grained halves of the control
-# surface. autopilot reads both each window (strategy.py / roles.py define the policy).
-_STRATEGY: dict = {"name": "balanced", "mining": True}
-_OVERRIDES: dict = {}   # {ship_symbol: role} from st_assign
-
-# Decision log — every control-surface change (strategy / knob / pin) the OODA strategist
-# makes, capped + newest-last. This is the audit trail for unattended runs: it lets the
-# showcase dashboard + st_report show WHAT the agent changed and the engine reconstruct its
-# own decision history. Records WHO (caller passes a reason) + the before→after.
-_DECISIONS: list = []
-
-
-def _log_decision(action: str, detail: str) -> None:
-    _DECISIONS.append({"action": action, "detail": detail})
-    del _DECISIONS[:-40]   # keep the last 40
-
-
-def decisions() -> list:
-    """The recent control-surface decision log (for st_report / the dashboard)."""
-    return list(_DECISIONS)
-
-
-def knobs() -> dict:
-    """The current engine knobs (name -> value) for audit/reporting."""
-    g = globals()
-    return {k: g[v] for k, v in _TUNABLE.items()}
-
-
-def _coerce_knob(old, value):
-    """Coerce a tuned ``value`` to the knob's existing type — accepts numbers-as-strings
-    ('300000') and bare strings (supply tiers like 'HIGH'); ints tolerate '3.0'."""
-    if isinstance(old, bool):
-        return str(value).strip().lower() in {"1", "true", "on", "yes"}
-    if isinstance(old, int):
-        return int(float(value))
-    if isinstance(old, float):
-        return float(value)
-    return str(value)
-
-
-def set_knob(name: str, value) -> str:
-    """Override an engine knob at runtime (bounded 'tune' authority — reversible). Type is
-    coerced to the knob's default type, so the agent may pass numbers or strings."""
-    key = (name or "").lower()
-    if key not in _TUNABLE:
-        return f"unknown knob {name!r}; tunable: {', '.join(_TUNABLE)}"
-    g = globals(); var = _TUNABLE[key]
-    old = g[var]
-    try:
-        g[var] = _coerce_knob(old, value)
-    except (TypeError, ValueError):
-        return f"bad value {value!r} for {key} (expected {type(old).__name__})"
-    if g[var] != old:
-        _log_decision("tune", f"{key}: {old} → {g[var]}")
-    return f"tuned {key}: {old} -> {g[var]}"
-
-
-def reset_knobs() -> None:
-    """Restore every knob to its import-time default (used when switching strategy)."""
-    g = globals()
-    for k, var in _TUNABLE.items():
-        g[var] = _DEFAULT_KNOBS[k]
-
-
-def current_strategy() -> dict:
-    """The active strategy preset + mining flag (for st_report / st_strategy)."""
-    return dict(_STRATEGY)
-
-
-def apply_strategy(name: str) -> str:
-    """Switch the engine to a named strategy preset (strategy.py): reset knobs to defaults,
-    apply the preset's overrides, and record its mining flag for autopilot. Takes effect on
-    the running engine from the next window."""
-    from . import strategy as _strat
-    preset = _strat.resolve(name)
-    if not preset:
-        return f"unknown strategy {name!r}; available: {', '.join(_strat.names())}"
-    reset_knobs()
-    for k, v in preset["knobs"].items():
-        set_knob(k, v)
-    _STRATEGY.update(name=preset["name"], mining=preset["mining"])
-    _log_decision("strategy", f"→ {preset['name']} (mining {'on' if preset['mining'] else 'off'})")
-    return (f"strategy → {preset['name']} ({preset['blurb']}) · mining "
-            f"{'on' if preset['mining'] else 'off'} · knobs now {knobs()}")
-
-
-def set_override(ship: str, role: str) -> str:
-    """Pin a ship to a role (st_assign): mine|trade|contract|scout|idle, or auto to clear.
-    The pin beats the auto-classifier on the next window (roles.assign_roles)."""
-    from . import roles as _roles
-    sym = (ship or "").upper()
-    r = (role or "").lower()
-    if r not in _roles.ROLE_NAMES:
-        return f"unknown role {role!r}; valid: {', '.join(sorted(_roles.ROLE_NAMES))}"
-    if r == "auto":
-        _OVERRIDES.pop(sym, None)
-        _log_decision("assign", f"{sym} → auto (pin cleared)")
-        return f"{sym}: override cleared → auto-classified"
-    _OVERRIDES[sym] = r
-    _log_decision("assign", f"{sym} → {r}")
-    return f"{sym}: pinned → {r} (overrides auto-classification next window)"
-
-
-def overrides() -> dict:
-    """The current per-ship role pins (for st_report / audit)."""
-    return dict(_OVERRIDES)
 
 
 async def _ranked_routes(system: str, market_wps: list) -> list:
@@ -629,8 +498,8 @@ async def _ranked_routes(system: str, market_wps: list) -> list:
             continue
         if m.get("tradeGoods"):
             prices.record_market(system, wp, m["tradeGoods"])
-    ranked = rank_routes(prices.price_map(system), min_margin=_MIN_MARGIN,
-                         sink_supply_cutoff=_SINK_SUPPLY_CUTOFF)
+    ranked = rank_routes(prices.price_map(system), min_margin=KNOBS.get("min_margin"),
+                         sink_supply_cutoff=KNOBS.get("sink_supply_cutoff"))
     if ranked:
         top = ranked[0]
         routes.remember_route(system, top["good"], top["buy_at"], top["sell_at"],
@@ -714,25 +583,25 @@ async def _maybe_reinvest(ships: list, system: str, *, log=None) -> None:
     """Self-scaling reinvestment: fill the price map FIRST with cheap probes (parallel
     scouting → arbitrage surfaces sooner), then scale trade with haulers once the map is
     covered and capital is comfortable."""
-    if len(ships) >= _MAX_SHIPS:
+    if len(ships) >= KNOBS.get("max_ships"):
         return
-    if await _credits() < _RESERVE_FLOOR:   # hard cash floor — protect the cushion
+    if await _credits() < KNOBS.get("reserve_floor"):   # hard cash floor — protect the cushion
         return
     from . import prices
     coverage = prices.stats(system).get("markets", 0)
     probes = sum(1 for s in ships if s["fuel"].get("capacity", 0) == 0)
-    if coverage < _MAP_TARGET and probes < _MAX_PROBES:
-        if await _credits() >= _PROBE_BUFFER:
+    if coverage < KNOBS.get("map_target") and probes < KNOBS.get("max_probes"):
+        if await _credits() >= KNOBS.get("probe_buffer"):
             await _buy_ship_at_yard(ships, system, "SHIP_PROBE", log=log)
-    elif await _credits() >= _BUY_BUFFER:
+    elif await _credits() >= KNOBS.get("buy_buffer"):
         await _buy_ship_at_yard(ships, system, "SHIP_LIGHT_HAULER", log=log)
 
 
 async def _maybe_buy_hauler(ships: list, system: str, *, log=None) -> None:
     """Reinvest profit into a LIGHT_HAULER when capital is comfortable and there's
     room to grow. Best-effort: a probe (flies free) ferries to a shipyard to buy it;
-    the new hauler joins the trade rotation next window. Guarded by _BUY_BUFFER."""
-    if len(ships) >= _MAX_SHIPS or await _credits() < _BUY_BUFFER:
+    the new hauler joins the trade rotation next window. Guarded by KNOBS.get("buy_buffer")."""
+    if len(ships) >= KNOBS.get("max_ships") or await _credits() < KNOBS.get("buy_buffer"):
         return
     try:
         yards = await C.call("GET", f"/systems/{system}/waypoints",
@@ -825,7 +694,7 @@ async def autopilot(minutes: float, *, log=None) -> dict:
         ships = await C.call("GET", "/my/ships")   # refresh after a possible buy
     jobs = {}
     # Strategy preset (mining on/off) + per-ship pins (st_assign) drive the split.
-    role = R.assign_roles(ships, mining_enabled=_STRATEGY["mining"], overrides=_OVERRIDES)
+    role = R.assign_roles(ships, mining_enabled=KNOBS.get("mining"), overrides=overrides())
     probes, miners, traders = role["probes"], role["miners"], role["traders"]
     # Spread probes ACROSS the markets (round-robin) so they cover ground instead of
     # all clustering on the first few — that's what fills the price map fast.
@@ -850,7 +719,7 @@ async def autopilot(minutes: float, *, log=None) -> dict:
         # is on, so they don't all stack on the single best route and saturate it.
         for i, s in enumerate(traders[1:], start=1):
             if system and market_wps:
-                rank = i if _ROUTE_DIVERSIFY else 0
+                rank = i if KNOBS.get("route_diversify") else 0
                 jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps,
                                                 rank=rank, log=log)
 
@@ -868,185 +737,100 @@ async def autopilot(minutes: float, *, log=None) -> dict:
     }
 
 
-# ── background ops — run the engine in the server loop so the agent doesn't block ─
+# ── background ops — the engine runs as a SUPERVISED background task (graph.sdk.supervise) ─
+# The autopilot blocks for its whole window; an agent over A2A can't tie up a turn for 20
+# minutes. So the engine runs as a self-perpetuating background task with a watchdog — re-kick
+# a crash, restart a stall, recover a universe reset — all from the shared Supervisor helper
+# (protoAgent #1025): we supply only the window + the predicates. The agent supervises via
+# ops_status() between turns. The deterministic watchdog is the heartbeat; the LLM agent is the
+# exception handler, not the other way around.
+_LOG: list = []      # the running progress log (capped) — for status + the dashboard
+_LOGSEQ = 0          # monotonic log counter — the supervisor's "progress" signal for stalls
+_ENGINE = None       # the Supervisor singleton (lazy — start() needs a running loop)
 
-# The autopilot blocks for its whole window; an agent driving over A2A can't tie up
-# a turn for 20 minutes. So launch it as a background task in the SAME event loop
-# (one shared rate budget), return immediately, and let the agent supervise via
-# ops_status() between turns. This is what makes hands-off autonomy practical.
-_OPS: dict = {"task": None, "started_minutes": 0.0, "result": None, "log": []}
+
+def _record(msg: str) -> None:
+    global _LOGSEQ
+    _LOG.append(msg)
+    del _LOG[:-200]
+    _LOGSEQ += 1
 
 
-async def _run_ops(minutes: float) -> None:
-    """Run autopilot windows BACK-TO-BACK so the engine self-perpetuates — it no longer
-    depends on a scheduler tick to relaunch it (the loopback self-POST is flaky under
-    load). WHEN to stop is NOT hardcoded here: the operator's objective lives in the
-    substrate's goal system (a `spacetraders:credits` plugin verifier, any target), and
-    its on_achieved hook calls request_stop(). The engine just earns until then."""
-    _OPS["log"] = []
-    _OPS["stop"] = False
+async def _window() -> dict:
+    """One autopilot window — the supervised unit of work. Reads the window length from the knob
+    each time, so the strategist can retune the OODA cadence live (st_tune window_minutes)."""
+    return await autopilot(KNOBS.get("window_minutes") or 15.0, log=_record)
+
+
+async def _stalled() -> bool:
+    """Confirm a REAL stall: the engine's log is frozen (progress) AND no ship is in transit — a
+    long DRIFT legitimately freezes the log, so don't false-trip on it."""
     try:
-        while not _OPS["stop"]:
-            # Read the window length from the knob each loop, so the OODA strategist can
-            # tighten/loosen the cadence live (st_tune window_minutes) — the engine picks
-            # the new window up on the very next iteration.
-            win = _WINDOW_MINUTES or minutes
-            _OPS["result"] = await autopilot(win, log=lambda m: _OPS["log"].append(m))
-            await asyncio.sleep(3)   # a breath between windows
-        _OPS["log"].append("engine wound down (goal reached or operator stop)")
-    except asyncio.CancelledError:
-        _OPS["result"] = {"stopped": True}
-        raise
-    except Exception as e:  # noqa: BLE001 — surface, don't crash the loop
-        _OPS["result"] = {"error": f"{type(e).__name__}: {e}"}
-    finally:
-        _OPS["task"] = None
+        ships = await C.call("GET", "/my/ships", params={"limit": 20})
+        return not any(s["nav"]["status"] == "IN_TRANSIT" for s in ships)
+    except Exception:  # noqa: BLE001 — can't tell → don't false-trip
+        return False
+
+
+async def _recover(result) -> bool:
+    """on_crash: a universe reset (4113) kills the token — re-register the call sign once for a
+    fresh token, then let the supervisor re-kick. Any other crash → re-kick. An unrecoverable
+    reset (no account token / call sign claimed) → return False so the supervisor stops the storm."""
+    err = (result or {}).get("error") or ""
+    if "4113" in err or "reset_date" in err:
+        try:
+            status = await C.recover_from_reset()
+        except Exception as e:  # noqa: BLE001
+            status = f"reset recovery errored: {e}"
+        _record(f"universe reset — {status}")
+        return status.startswith("re-registered")
+    return True
+
+
+def _engine():
+    """The Supervisor singleton (lazy: start() creates tasks, so build it in the async context
+    of the first start)."""
+    global _ENGINE
+    if _ENGINE is None:
+        from graph.sdk import supervise
+        _ENGINE = supervise(_window, name="fleet", interval=90, breath=3.0, stall_ticks=3,
+                            progress=lambda: _LOGSEQ, stall_check=_stalled, on_crash=_recover)
+    return _ENGINE
 
 
 def request_stop() -> None:
-    """Signal the self-perpetuating engine to wind down after the current window. Called
-    by the plugin's goal hook when the operator's substrate goal is achieved."""
-    _OPS["want_running"] = False   # intentional wind-down — the watchdog must NOT re-kick
-    _OPS["stop"] = True
+    """Wind the engine down gracefully after the current window (no re-kick) — called by the
+    plugin's goal on_achieved hook when the operator's target is reached."""
+    _engine().request_stop()
 
 
 def start_ops(minutes: float) -> str:
-    _OPS["want_running"] = True   # operator wants the engine up; the watchdog keeps it there
-    _ensure_watchdog()
-    task = _OPS.get("task")
-    if task is not None and not task.done():
+    set_knob("window_minutes", minutes)   # seed the knob so st_report/st_tune agree
+    _LOG.clear()
+    if "already running" in _engine().start():
         return "Fleet ops already running — check status before starting another."
-    _OPS["started_minutes"] = minutes
-    set_knob("window_minutes", minutes)   # seed the tunable so st_report/st_tune agree
-    _OPS["result"] = None
-    _OPS["task"] = asyncio.create_task(_run_ops(minutes))
-    return (f"Fleet ops started in the background for ~{minutes:g} min. The whole "
-            f"fleet is working under one rate budget (watchdog keeping it alive). "
-            f"Check st_autopilot_status.")
+    return (f"Fleet ops started in the background (~{minutes:g} min windows, watchdog keeping it "
+            f"alive). The whole fleet works under one rate budget. Check st_autopilot_status.")
 
 
 def stop_ops() -> str:
-    _OPS["want_running"] = False   # operator stop — the watchdog must NOT re-kick
-    task = _OPS.get("task")
-    if task is None or task.done():
+    if _ENGINE is None or not _engine().running():
         return "No fleet ops running."
-    task.cancel()
+    _engine().stop()
     return "Stopping fleet ops."
 
 
-# --- Reliability watchdog (deterministic, NO LLM) -------------------------------------
-# The engine self-PERPETUATES (loops windows) but does not self-MONITOR: a transient
-# ConnectTimeout drops _run_ops, or a window ends and it stops — and the fleet sits idle
-# until a human notices. This background task is the heartbeat. While the operator wants
-# the engine running (want_running, cleared only on an INTENTIONAL stop/goal-reached) it:
-#   - re-kicks a crashed/stopped engine, and
-#   - breaks a stall (engine "running" but its log is frozen AND every ship is idle).
-# It NEVER dies (all exceptions swallowed) and writes a capped wd_log for observability.
-# See docs/dev/reliability-notes.md — the deterministic layer is the heartbeat; the LLM
-# agent is the exception handler, not the other way around.
-_WD_INTERVAL = 90       # seconds between health checks
-_WD_STALL_TICKS = 3     # consecutive frozen-log checks (~4.5 min) before calling it a stall
-
-
-def _engine_running() -> bool:
-    task = _OPS.get("task")
-    return task is not None and not task.done()
-
-
-def _wd_log(msg: str) -> None:
-    log = _OPS.setdefault("wd_log", [])
-    log.append(msg)
-    del log[:-30]   # keep the last 30
-
-
-def _ensure_watchdog() -> None:
-    """Start the watchdog once (idempotent). Created lazily from the first start_ops, which
-    runs in an async context (an event loop exists)."""
-    wd = _OPS.get("watchdog")
-    if wd is None or wd.done():
-        _OPS["watchdog"] = asyncio.create_task(_watchdog())
-
-
-async def _watchdog() -> None:
-    frozen = 0
-    last_loglen = -1
-    rekicks = 0
-    recovered_reset = False   # one auto-recovery attempt per down-streak
-    while True:
-        try:
-            await asyncio.sleep(_WD_INTERVAL)
-            if not _OPS.get("want_running"):
-                frozen = 0
-                continue
-            # (1) crashed / stopped while we want it running → re-kick
-            if not _engine_running():
-                err = (_OPS.get("result") or {}).get("error") or ""
-                # A universe reset kills the token — every re-kick just crashes
-                # again on 4113. Auto-recover ONCE per down-streak: re-register the
-                # configured call sign for a fresh token, then re-kick. If we can't
-                # (no account token / call sign now claimed), stop wanting-running
-                # so we don't spin — the operator re-registers a new call sign.
-                if ("4113" in err or "reset_date" in err) and not recovered_reset:
-                    recovered_reset = True
-                    try:
-                        status = await C.recover_from_reset()
-                    except Exception as e:  # noqa: BLE001
-                        status = f"reset recovery errored: {e}"
-                    _wd_log(f"universe reset — {status}")
-                    if status.startswith("re-registered"):
-                        start_ops(_OPS.get("started_minutes") or 15.0)
-                        frozen = 0
-                        continue
-                    _OPS["want_running"] = False   # can't auto-recover → stop the storm
-                    continue
-                rekicks += 1
-                _wd_log(f"engine down ({err or 'stopped'}) — re-kick #{rekicks}")
-                if rekicks == 5:
-                    _wd_log("engine persistently failing — may need attention")
-                start_ops(_OPS.get("started_minutes") or 15.0)
-                frozen = 0
-                continue
-            rekicks = 0
-            recovered_reset = False   # engine healthy again → re-arm reset recovery
-            # (2) running but its log is frozen → possible stall. Only act if NO ship is in
-            #     transit (a long DRIFT legitimately freezes the log) — else don't false-trip.
-            loglen = len(_OPS.get("log", []))
-            if loglen != last_loglen:
-                last_loglen = loglen
-                frozen = 0
-                continue
-            frozen += 1
-            if frozen >= _WD_STALL_TICKS:
-                try:
-                    ships = await C.call("GET", "/my/ships", params={"limit": 20})
-                    moving = any(s["nav"]["status"] == "IN_TRANSIT" for s in ships)
-                except Exception:  # noqa: BLE001
-                    moving = True   # can't tell → don't false-trip
-                if not moving:
-                    _wd_log("stall (log frozen, all ships idle) — restarting engine")
-                    t = _OPS.get("task")
-                    if t and not t.done():
-                        t.cancel()
-                    await asyncio.sleep(2)
-                    start_ops(_OPS.get("started_minutes") or 15.0)
-                frozen = 0
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 — the watchdog must NEVER die
-            await asyncio.sleep(_WD_INTERVAL)
-
-
 def ops_status() -> dict:
-    task = _OPS.get("task")
-    running = task is not None and not task.done()
+    st = _engine().status() if _ENGINE is not None else {
+        "running": False, "want_running": False, "watchdog": False, "result": None, "events": []}
     return {
-        "running": running,
-        "want_running": _OPS.get("want_running", False),
-        "watchdog": (_OPS.get("watchdog") is not None and not _OPS["watchdog"].done()),
-        "started_minutes": _OPS.get("started_minutes", 0),
-        "recent_log": _OPS.get("log", [])[-6:],
-        "watchdog_log": _OPS.get("wd_log", [])[-5:],
-        "result": _OPS.get("result"),
+        "running": st["running"],
+        "want_running": st["want_running"],
+        "watchdog": st["watchdog"],
+        "started_minutes": KNOBS.get("window_minutes"),
+        "recent_log": _LOG[-6:],
+        "watchdog_log": st.get("events", [])[-5:],
+        "result": st.get("result"),
     }
 
 
@@ -1074,7 +858,7 @@ async def report() -> dict:
 
     # Label each ship with the role the engine WOULD assign it this window (same call the
     # autopilot makes), so the report and the engine never disagree.
-    role = R.assign_roles(ships, mining_enabled=_STRATEGY["mining"], overrides=_OVERRIDES)
+    role = R.assign_roles(ships, mining_enabled=KNOBS.get("mining"), overrides=overrides())
     label = {}
     for p in role["probes"]:
         label[p["symbol"]] = "scout"
@@ -1088,9 +872,9 @@ async def report() -> dict:
         sym, nav, cargo = s["symbol"], s["nav"], s["cargo"]
         units, cap = cargo.get("units", 0), cargo.get("capacity", 0)
         in_transit = nav["status"] == "IN_TRANSIT"
-        r = label.get(sym) or ("idle" if sym in _OVERRIDES else "—")
+        r = label.get(sym) or ("idle" if sym in overrides() else "—")
         stranded = (not in_transit) and cap > 0 and units >= cap   # parked with a full hold
-        rows.append({"symbol": sym, "role": r, "pinned": _OVERRIDES.get(sym),
+        rows.append({"symbol": sym, "role": r, "pinned": overrides().get(sym),
                      "status": nav["status"], "at": nav["waypointSymbol"],
                      "cargo": f"{units}/{cap}", "stranded": stranded})
         if stranded:
@@ -1098,25 +882,36 @@ async def report() -> dict:
 
     if ops["running"] and last and per_hour <= 0:
         hints.append("engine not earning this window — check routes/saturation or lower min_margin")
-    if credits >= _BUY_BUFFER and len(ships) < _MAX_SHIPS and ops["running"]:
-        hints.append(f"{credits:,} cr idle with room to grow — reinvest (buy_buffer {_BUY_BUFFER:,})")
+    if credits >= KNOBS.get("buy_buffer") and len(ships) < KNOBS.get("max_ships") and ops["running"]:
+        hints.append(f"{credits:,} cr idle with room to grow — reinvest (buy_buffer {KNOBS.get('buy_buffer'):,})")
     if not _ROUTE_CACHE.get("routes") and any(v in ("trader", "contract") for v in label.values()):
         hints.append("no profitable route mapped — scout more markets or lower min_margin")
 
-    return {
-        "ok": True,
-        "credits": credits,
-        "ships": len(ships),
-        "strategy": _STRATEGY["name"],
-        "mining": _STRATEGY["mining"],
-        "engine": {"running": ops["running"], "window_min": _WINDOW_MINUTES,
-                   "last_gained": last.get("gained"), "per_hour": per_hour,
-                   "recent_log": ops["recent_log"][-4:]},
-        "projection": {"to_250k": _eta_hours(credits, per_hour, 250_000),
-                       "to_1m": _eta_hours(credits, per_hour, 1_000_000)},
-        "knobs": knobs(),
-        "overrides": overrides(),
-        "fleet": rows,
-        "hints": hints,
-        "decisions": _DECISIONS[-6:],
+    # Build the standard telemetry envelope (status / metrics / hints / decisions / sections),
+    # on the shared SDK helper (protoAgent #1027), carrying the existing keys as extras so the
+    # st_report tool + dashboard consume it unchanged.
+    from graph.sdk import telemetry
+    eta_1m = _eta_hours(credits, per_hour, 1_000_000)
+    status = (f"{'running' if ops['running'] else 'stopped'} · {credits:,} cr · {per_hour:,} cr/hr"
+              + (f" · ~{eta_1m}h to 1M" if eta_1m else ""))
+    fleet_section = {
+        "title": "Fleet",
+        "columns": ["ship", "role", "status", "at", "cargo"],
+        "rows": [[r["symbol"], r["role"] + (" ⚠" if r["stranded"] else ""),
+                  r["status"], r["at"], r["cargo"]] for r in rows],
     }
+    return telemetry(
+        status=status,
+        metrics={"credits": credits, "ships": len(ships), "cr/hr": per_hour},
+        hints=hints,
+        decisions=decisions()[-6:],
+        sections=[fleet_section],
+        # extras (consumed by the st_report tool / any caller):
+        ok=True, credits=credits, ships=len(ships), strategy=current_strategy()["name"],
+        mining=KNOBS.get("mining"),
+        engine={"running": ops["running"], "window_min": KNOBS.get("window_minutes"),
+                "last_gained": last.get("gained"), "per_hour": per_hour,
+                "recent_log": ops["recent_log"][-4:]},
+        projection={"to_250k": _eta_hours(credits, per_hour, 250_000), "to_1m": eta_1m},
+        knobs=knobs(), overrides=overrides(), fleet=rows,
+    )

@@ -296,12 +296,13 @@ async def st_strategy(name: str = "") -> str:
     Args:
         name: the preset to switch to, or "" to show the current strategy + menu.
     """
-    from . import fleet, strategy
+    from . import fleet
     if not name:
         cur = fleet.current_strategy()
+        presets = fleet.KNOBS.presets()
         menu = "\n".join(
-            f"  {'➤' if n == cur['name'] else ' '} {n} — {strategy.PRESETS[n]['blurb']}"
-            for n in strategy.names())
+            f"  {'➤' if n == cur['name'] else ' '} {n} — {p['blurb']}"
+            for n, p in presets.items())
         return f"strategy: {cur['name']} (mining {'on' if cur['mining'] else 'off'})\n{menu}"
     return fleet.apply_strategy(name)
 
