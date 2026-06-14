@@ -24,7 +24,10 @@ def register(registry) -> None:
     # Seed the token(s) the user set in the console (System → Settings →
     # SpaceTraders), so the tools authenticate without a hand-edited file.
     cfg = getattr(registry, "config", {}) or {}
-    set_config_token(cfg.get("token"), cfg.get("account_token"))
+    set_config_token(
+        cfg.get("token"), cfg.get("account_token"),
+        call_sign=cfg.get("call_sign"), faction=cfg.get("faction"),
+    )
 
     registry.register_tools(get_spacetraders_tools())
     log.info("[spacetraders] registered galactic fleet/market/contract tools")

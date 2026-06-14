@@ -43,20 +43,63 @@ async def _pace() -> None:
 
 
 class SpaceTradersError(Exception):
-    """An API error envelope, already formatted for the agent to read."""
+    """An API error envelope, already formatted for the agent to read.
+
+    ``code`` carries the SpaceTraders error code when the failure came from an API
+    envelope — e.g. 4111 (call sign already claimed), 4113 (token is from a
+    previous universe reset). ``None`` for client-side errors (no token, network
+    give-up). Callers branch on it (see ``is_reset_error``)."""
+
+    def __init__(self, message: str, *, code: int | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 # Token set from the plugin config (console: System → Settings → SpaceTraders),
 # seeded by the plugin's register() from secrets.yaml at graph build.
 _CONFIG_TOKEN: str | None = None
 _CONFIG_ACCOUNT_TOKEN: str | None = None
+_CONFIG_CALL_SIGN: str | None = None
+_CONFIG_FACTION: str | None = None
 
 
-def set_config_token(token: str | None, account_token: str | None = None) -> None:
-    global _CONFIG_TOKEN, _CONFIG_ACCOUNT_TOKEN
+def set_config_token(
+    token: str | None,
+    account_token: str | None = None,
+    call_sign: str | None = None,
+    faction: str | None = None,
+) -> None:
+    global _CONFIG_TOKEN, _CONFIG_ACCOUNT_TOKEN, _CONFIG_CALL_SIGN, _CONFIG_FACTION
     _CONFIG_TOKEN = (token or "").strip() or None
     if account_token is not None:
         _CONFIG_ACCOUNT_TOKEN = (account_token or "").strip() or None
+    if call_sign is not None:
+        _CONFIG_CALL_SIGN = (call_sign or "").strip() or None
+    if faction is not None:
+        _CONFIG_FACTION = (faction or "").strip() or None
+
+
+def set_call_sign(symbol: str) -> None:
+    """Remember the active call sign in-process so reset-recovery can re-register
+    the same agent without the operator re-typing it."""
+    global _CONFIG_CALL_SIGN
+    _CONFIG_CALL_SIGN = (symbol or "").strip() or _CONFIG_CALL_SIGN
+
+
+def call_sign() -> str | None:
+    """The agent call sign to (re-)register (config or env)."""
+    return _CONFIG_CALL_SIGN or (os.environ.get("SPACETRADERS_CALL_SIGN", "").strip() or None)
+
+
+def faction() -> str:
+    """The starting faction for a (re-)register (config or COSMIC default)."""
+    return _CONFIG_FACTION or (os.environ.get("SPACETRADERS_FACTION", "").strip() or "COSMIC")
+
+
+def is_reset_error(exc: Exception) -> bool:
+    """True when a failure means the agent token is from a previous SpaceTraders
+    universe reset (code 4113) — i.e. re-registering is the fix, not retrying."""
+    return getattr(exc, "code", None) == 4113 or "reset_date" in str(exc)
 
 
 def account_token() -> str | None:
@@ -152,5 +195,56 @@ async def call(
             err = body.get("error", {})
             code = err.get("code", resp.status_code)
             msg = err.get("message", "unknown error")
-            raise SpaceTradersError(f"[{code}] {msg}")
+            code_int = code if isinstance(code, int) else None
+            if code_int == 4113:
+                # Universe reset: the token is from the previous cycle. Make the
+                # fix unmistakable so the agent (or the watchdog) re-registers
+                # instead of hammering a dead token.
+                raise SpaceTradersError(
+                    "[4113] SpaceTraders ran its periodic universe reset — this agent "
+                    "token is from the previous cycle and is now dead. Re-register the "
+                    "agent to mint a fresh token (it saves automatically): reuse your "
+                    "call sign if it's free, else pick a new one. "
+                    f"(server: {msg})",
+                    code=4113,
+                )
+            raise SpaceTradersError(f"[{code}] {msg}", code=code_int)
     raise SpaceTradersError("rate limited — gave up after retries")
+
+
+async def register_agent(symbol: str, faction_: str, account_tok: str) -> dict:
+    """Register an agent and persist the returned **agent token** (and call sign)
+    live + to secrets — the SINGLE place both ``st_register`` and reset-recovery go
+    through, so a successful (re-)registration always updates the token everywhere.
+    Raises ``SpaceTradersError`` (e.g. 4111 if the call sign is already claimed)."""
+    data = await call("POST", "/register", token=account_tok,
+                      json={"symbol": symbol, "faction": faction_})
+    tok = data.get("token", "")
+    if tok:
+        save_token(tok)        # live _CONFIG_TOKEN + secrets.yaml — used by every later call
+    set_call_sign(symbol)      # so a later reset can re-register the same agent
+    return data
+
+
+async def recover_from_reset() -> str:
+    """Auto-recover after a universe reset: re-register the configured call sign
+    with the stored account token and save the fresh agent token. Returns a status
+    line. No-ops with guidance when the account token / call sign isn't configured,
+    or the call sign is now claimed (so the operator picks a new one)."""
+    acct = account_token()
+    sym = call_sign()
+    if not acct:
+        return ("can't auto-recover — no account token configured (System → Settings "
+                "→ SpaceTraders), so a fresh agent token can't be minted.")
+    if not sym:
+        return ("can't auto-recover — no call sign configured; re-register with "
+                "st_register(symbol=…).")
+    try:
+        data = await register_agent(sym, faction(), acct)
+    except SpaceTradersError as e:
+        if getattr(e, "code", None) == 4111:
+            return (f"call sign {sym} is already claimed this cycle — re-register with "
+                    f"a new call sign (st_register).")
+        return f"re-register failed: {e}"
+    ag = data.get("agent", {})
+    return f"re-registered {sym} after the reset — fresh token saved (credits {ag.get('credits', '?')})."
