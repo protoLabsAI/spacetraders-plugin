@@ -159,7 +159,8 @@ job. Report honestly in real credits — the cr/hr number is the scoreboard. If 
 operator set a different goal (a target balance, build the jump gate, scout a
 region), pursue THAT instead of raw cr/hr.""",
     tools=[
-        "st_agent", "st_fleet", "st_autopilot_status", "st_autopilot_start", "st_autopilot_stop",
+        "st_report", "st_agent", "st_fleet", "st_autopilot_status",
+        "st_autopilot_start", "st_autopilot_stop", "st_strategy",
         "st_contracts", "st_negotiate_contract", "st_trade_routes", "st_find_market",
         "st_shipyard", "st_buy_ship",
     ],
@@ -168,14 +169,16 @@ region), pursue THAT instead of raw cr/hr.""",
 
 
 _STRATEGIST_TOOLS = [
-    # AUDIT (read-only): position, fleet, contracts, routes, engine knobs
+    # OBSERVE (read-only): the rich telemetry report first, then position/fleet/routes/knobs
+    "st_report",  # OODA OBSERVE — credits/hr trajectory, per-ship health, knobs, hints
     "st_agent", "st_fleet", "st_ship", "st_autopilot_status", "st_knobs",
     "st_contracts", "st_trade_routes", "st_find_market", "st_market", "st_waypoints", "st_shipyard",
     # RESEARCH + KNOWLEDGE — the self-improvement substrate
     "st_docs",  # official SpaceTraders reference (OpenAPI spec) — rules/schemas/enums
     "web_search", "fetch_url", "memory_recall", "memory_list", "memory_ingest", "current_time",
-    # ACT — self-heal + tune + reserve-protected FLEET GROWTH (the one allowed spend)
-    "st_autopilot_start", "st_autopilot_stop", "st_tune", "st_buy_ship",
+    # ACT — self-heal + the control surface (strategy/knobs/per-ship pins) + reserve-protected
+    # FLEET GROWTH (the one allowed spend)
+    "st_autopilot_start", "st_autopilot_stop", "st_strategy", "st_tune", "st_assign", "st_buy_ship",
     "st_navigate", "st_travel", "st_dock", "st_orbit", "st_refuel",
     # symmetric cargo: it could already st_sell — now it can also BUY goods + FULFILL a
     # contract (st_purchase/st_deliver) as a fallback when the engine genuinely can't.

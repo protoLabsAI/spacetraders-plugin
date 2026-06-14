@@ -97,21 +97,27 @@ LESSONS: list[tuple[str, str]] = [
         "all). Cargo transfer (st_transfer) works only between YOUR OWN co-located "
         "ships.")),
     ("wipe-cycle", (
-        "The SpaceTraders universe RESETS every few weeks (check the API root GET / "
-        "for resetDate). A reset wipes the agent, token, ships, credits, and "
-        "contracts. Durable game mechanics survive (these lessons); per-reset state "
-        "does NOT — agent symbol, system, waypoint ids, prices, and contract ids "
-        "all change. After a wipe: re-register the agent (needs an account token), "
-        "re-seed this knowledge, and re-scan live state. Never assume yesterday's "
+        "The SpaceTraders universe RESETS WEEKLY (Saturday mornings; check the API root "
+        "GET / for resetDate + the next reset). A reset wipes the agent, token, ships, "
+        "credits, and contracts. Durable game mechanics survive (these lessons); per-reset "
+        "state does NOT — agent symbol, system, waypoint ids, prices, and contract ids all "
+        "change. The 7-day window is the DOMINANT strategic constraint: 1M credits in a week "
+        "is a top-tier result, so bootstrap fast. Auth is two-token (v2.3.0): a persistent "
+        "ACCOUNT token (from my.spacetraders.io) registers a fresh per-reset AGENT token + "
+        "175,000 cr + a COMMAND frigate + a PROBE + a starting contract. After a wipe: "
+        "re-register, re-seed this knowledge, re-scan live state. Never assume yesterday's "
         "ids or prices.")),
     ("ship-roles", (
-        "SpaceTraders ship roles: COMMAND frigate (versatile — can mine AND haul); "
-        "PROBE (0 fuel, free-moving scout — station one at a market to read live "
-        "prices); LIGHT_SHUTTLE / LIGHT_HAULER (cargo ships for trade and contract "
-        "hauls); MINING_DRONE (mines unattended); SIPHON_DRONE (gas giants). "
-        "Early-game loop: command ship + a hauler + light mining — the hauler's "
-        "round trip is the bottleneck, so don't out-mine your haul capacity. Buy "
-        "ships at a SHIPYARD with st_buy_ship (one of your ships must be present).")),
+        "SpaceTraders ship roles: COMMAND frigate (versatile — PRE-FITTED with a mining "
+        "laser II + gas siphon II + surveyor II, so it can mine, siphon, survey AND haul "
+        "from turn one); PROBE (~28k, 0 fuel, free-moving scout — station one at a market to "
+        "read live prices); LIGHT_HAULER (~393k, 80 cargo — the best early TRADER); "
+        "LIGHT_SHUTTLE / MINING_DRONE (~52k, 15 cargo, mines unattended); ORE_HOUND "
+        "(best dedicated miner); SIPHON_DRONE (gas giants, ~2× the yield of ore mining). "
+        "Early-game loop: command ship + a hauler + light mining — the hauler's round trip "
+        "is the bottleneck, so don't out-mine your haul capacity. The engine classifies "
+        "each ship by its MOUNTS (a mining laser ⇒ miner), not its name. Buy ships at a "
+        "SHIPYARD with st_buy_ship (one of your ships must be present).")),
     ("self-improvement", (
         "How I (protoTrader-in-space) improve: after discovering something "
         "repeatable — a profitable route, a game rule, a pitfall — I record it with "
@@ -141,10 +147,25 @@ LESSONS: list[tuple[str, str]] = [
         "sell-import-expensive route, so credits compound with fleet size (the "
         "leaderboard whales run 27-39 ships). (3) SCOUT markets with probes — prices "
         "only show with a ship present, and trade decisions need that intel. (4) "
-        "REINVEST profit into LIGHT_HAULERs once capital comfortably exceeds the ~290k "
+        "REINVEST profit into LIGHT_HAULERs once capital comfortably exceeds the ~390k "
         "cost AND a profitable route exists to put them on. (5) GUARD every buy: skip "
         "when sell<=buy (saturation), and never accept an un-sourceable contract. "
+        "MINING is a zero-capital opener (use the drone you have) but does NOT scale — "
+        "it's cooldown-bound and self-depresses ore prices, so don't buy a mining fleet. "
         "Contracts seed it, trade compounds it, scouting informs it, guards protect it.")),
+    ("steering-the-engine", (
+        "The fleet runs as TWO loops: a deterministic autopilot ENGINE (the muscle — runs "
+        "windows back-to-back, one rate limiter, contracts/trade/mine/scout, watchdog) and "
+        "the agentic OODA strategist (the brain — me, steering between windows). My control "
+        "surface: st_report (OBSERVE — cr/hr trajectory, per-ship health, hints), st_strategy "
+        "(switch DOCTRINE: balanced/trade-max/mining/contract-grind), st_tune (fine-tune one "
+        "knob — min_margin, buy_buffer, reserve_floor, window_minutes, sink_volume_mult, "
+        "sink_supply_cutoff, route_diversify…), st_assign (PIN a ship to mine/trade/scout/"
+        "contract/idle, overriding the auto-classifier). Changes take effect on the next "
+        "window. Loop each tick: st_report → recall lessons → ONE steering change → "
+        "memory_ingest what I learned. The engine ENFORCES saturation damping (sells ≈ one "
+        "tradeVolume/visit, skips glutted importers, diversifies haulers) so I don't crash my "
+        "own routes — I tune those guards, I don't babysit them. See skill manage-the-fleet.")),
     ("check-live-prices", (
         "Structural arbitrage (st_trade_routes export→import) tells you WHAT flows "
         "where, but not whether it's profitable RIGHT NOW. Saturated markets can have "

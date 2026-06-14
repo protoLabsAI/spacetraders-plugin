@@ -17,6 +17,7 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import client as C
+from . import roles as R
 
 _CACHE: dict = {"at": -999.0, "data": None}
 _TTL = 8.0  # seconds — cap how often the dashboard hits the live API
@@ -58,7 +59,8 @@ def _ship_row(s: dict) -> dict:
     route = nav.get("route", {})
     return {
         "symbol": s["symbol"],
-        "role": "cargo" if cargo.get("capacity", 0) > 0 else "scout",
+        "role": ("scout" if cargo.get("capacity", 0) == 0
+                 else "miner" if R.can_mine(s) else "cargo"),
         "status": nav.get("status", "?"),
         "waypoint": nav.get("waypointSymbol", "?"),
         "fuel": ("∞" if fuel.get("capacity", 0) == 0
@@ -186,6 +188,7 @@ async def _snapshot() -> dict:
     from . import fleet
     ops = fleet.ops_status()
     last = ops.get("result") or {}
+    strat = fleet.current_strategy()
     status = await _server_status()
     from . import routes as _routes
     learned = _routes.recall_routes("-".join(agent["headquarters"].split("-")[:2]))
@@ -208,7 +211,12 @@ async def _snapshot() -> dict:
             "watchdog_log": ops.get("watchdog_log", []),  # recoveries the watchdog made
             "last_per_hour": last.get("per_hour"),
             "last_gained": last.get("gained"),
+            "strategy": strat.get("name"),
+            "mining": strat.get("mining"),
         },
+        # The OODA strategist's control-surface decision trail — what the agent changed
+        # and why, the visible proof of the self-improving brain steering the engine.
+        "decisions": fleet.decisions()[-8:],
     }
     _emit_metrics(data["agent"], last)
     _CACHE.update(at=now, data=data)
@@ -420,6 +428,7 @@ function render(d){
   <div class="pl-stats">
     <div class="pl-stat"><div class="pl-stat__num">${a.credits.toLocaleString()} cr</div><div class="pl-stat__label">Treasury</div></div>
     <div class="pl-stat"><div class="pl-stat__num"><span class="pl-dot ${ap.running?'pl-dot--success pl-dot--pulse':''}"></span> ${ap.running?'running':'idle'}${ap.running?` · ${ap.window}m`:''}</div><div class="pl-stat__label">Autopilot${ap.last_per_hour!=null?` · last ${cr(ap.last_gained)} (≈ ${cr(ap.last_per_hour)}/hr)`:''}</div></div>
+    <div class="pl-stat"><div class="pl-stat__num">${ap.strategy||'balanced'}</div><div class="pl-stat__label">Strategy · mining ${ap.mining===false?'off':'on'}</div></div>
   </div>
   <div class="grid">
     <div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">Standing — most credits</h2></div>
@@ -440,6 +449,8 @@ function render(d){
     <table class="pl-table"><tr><th>Type</th><th>Deliver</th><th>To</th><th>Pays</th><th>State</th></tr>${cons}</table></div>
   <div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">Learned routes</h2><span class="pl-panel-header__kicker">the agent's trade-route memory</span></div>
     <table class="pl-table"><tr><th>Good</th><th>Buy at</th><th>Sell at</th><th>+/unit</th></tr>${routesRows}</table></div>
+  ${(d.decisions && d.decisions.length)?`<div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">Strategist decisions</h2><span class="pl-panel-header__kicker">the OODA brain steering the engine</span></div>
+    <table class="pl-table"><tr><th>Move</th><th>Detail</th></tr>${d.decisions.slice().reverse().map(x=>`<tr><td><span class="pl-badge pl-badge--info">${esc(x.action)}</span></td><td>${esc(x.detail)}</td></tr>`).join("")}</table></div>`:''}
   ${ap.log && ap.log.length?`<div class="pl-card"><div class="pl-panel-header"><h2 class="pl-panel-header__title">Engine log</h2></div>
     <div class="log">${ap.log.map(l=>l.replace(/</g,'&lt;')).join("\n")}</div></div>`:''}
   `;

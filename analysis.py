@@ -16,7 +16,94 @@ spread — we rank by margin × tradeVolume (per-cycle throughput): a 10% route 
 """
 
 
-def best_route(markets: list[dict], min_margin: int = 1) -> dict:
+# Supply tiers, ordered cheapest-to-buy / most-saturated-to-sell-into.
+_SUPPLY_ORDER = {"SCARCE": 0, "LIMITED": 1, "MODERATE": 2, "HIGH": 3, "ABUNDANT": 4}
+
+
+def _supply_tier(supply) -> int:
+    """Numeric supply tier (0=SCARCE … 4=ABUNDANT); unknown sorts as MODERATE."""
+    return _SUPPLY_ORDER.get((supply or "").upper(), 2)
+
+
+def rank_routes(markets: list[dict], min_margin: int = 1,
+                sink_supply_cutoff: str = "ABUNDANT") -> list[dict]:
+    """All profitable supply-chain routes, ranked best-first (same route shape as
+    ``best_route``). ``sink_supply_cutoff`` is the saturation guard: an importer whose
+    supply is already AT OR ABOVE this tier is skipped as a sell target — it's saturated,
+    won't pay the premium, and dumping into it just craters the price further (the #1
+    documented way an unattended bot crashes its own market). Default ABUNDANT skips only
+    the most saturated sinks; the strategist can tighten it to HIGH/MODERATE via st_tune.
+
+    Returns ``[]`` if nothing clears ``min_margin``. Used by the engine to diversify
+    several haulers across the top-N routes instead of stacking them all on one (which
+    would saturate it); ``best_route`` returns just the top entry.
+    """
+    if not markets:
+        return []
+    cutoff = _supply_tier(sink_supply_cutoff)
+
+    exports: dict[str, list] = {}    # good -> [(purchasePrice, waypoint, tradeVolume, supply)]
+    imports: dict[str, list] = {}    # good -> [(sellPrice, waypoint, supply)]
+    exchanges: dict[str, list] = {}  # good -> [(purchasePrice, sellPrice, waypoint, tradeVolume)]
+    for market in markets:
+        waypoint = market.get("waypointSymbol")
+        if not waypoint:
+            continue
+        for good in (market.get("tradeGoods") or []):
+            symbol = good.get("symbol")
+            if not symbol:
+                continue
+            gtype = good.get("type")
+            bp = good.get("purchasePrice")
+            sp = good.get("sellPrice")
+            vol = good.get("tradeVolume") or 0
+            supply = good.get("supply")
+            if gtype == "EXPORT":
+                if bp is None:
+                    continue
+                exports.setdefault(symbol, []).append((bp, waypoint, vol, supply))
+            elif gtype == "IMPORT":
+                if sp is None or _supply_tier(supply) >= cutoff:   # saturation guard
+                    continue
+                imports.setdefault(symbol, []).append((sp, waypoint, supply))
+            elif gtype == "EXCHANGE":
+                if bp is None or sp is None:
+                    continue
+                exchanges.setdefault(symbol, []).append((bp, sp, waypoint, vol))
+
+    primary: list[dict] = []
+    for good in set(exports) & set(imports):
+        buy_price, buy_wp, buy_vol, _ = min(exports[good], key=lambda x: x[0])
+        sell_price, sell_wp, _ = max(imports[good], key=lambda x: x[0])
+        if buy_wp == sell_wp:
+            continue
+        margin = int(sell_price - buy_price)
+        if margin < min_margin:
+            continue
+        primary.append({"good": good, "buy_at": buy_wp, "sell_at": sell_wp,
+                        "profit_per_unit": margin, "volume": buy_vol,
+                        "kind": "export→import", "score": margin * max(buy_vol, 1)})
+    if primary:
+        return sorted(primary, key=lambda r: r["score"], reverse=True)
+
+    # FALLBACK: cross-market EXCHANGE spreads (no refilling supply chain available).
+    fallback: list[dict] = []
+    for good, listings in exchanges.items():
+        for buy_price, _, buy_wp, buy_vol in listings:
+            for _, sell_price, sell_wp, _ in listings:
+                if buy_wp == sell_wp:
+                    continue
+                margin = int(sell_price - buy_price)
+                if margin < min_margin:
+                    continue
+                fallback.append({"good": good, "buy_at": buy_wp, "sell_at": sell_wp,
+                                 "profit_per_unit": margin, "volume": buy_vol,
+                                 "kind": "exchange", "score": margin * max(buy_vol, 1)})
+    return sorted(fallback, key=lambda r: r["score"], reverse=True)
+
+
+def best_route(markets: list[dict], min_margin: int = 1,
+               sink_supply_cutoff: str = "ABUNDANT") -> dict:
     """
     Find the best SUPPLY-CHAIN trade route across a list of markets.
 
@@ -59,88 +146,13 @@ def best_route(markets: list[dict], min_margin: int = 1) -> dict:
         FALLBACK — only when no export->import pair exists at all: cross-market
         EXCHANGE spreads (buy an exchange good at one waypoint, sell it at another).
         These don't refill the way an export/import pair does, so they're a last resort.
+
+        ``sink_supply_cutoff`` skips importers already saturated at/above that supply
+        tier (see ``rank_routes``). This is the single best of the ranked routes; the
+        engine uses ``rank_routes`` directly to spread haulers across the top-N.
     """
-    if not markets:
-        return {}
-
-    exports: dict[str, list] = {}    # good -> [(purchasePrice, waypoint, tradeVolume, supply)]
-    imports: dict[str, list] = {}    # good -> [(sellPrice, waypoint, supply)]
-    exchanges: dict[str, list] = {}  # good -> [(purchasePrice, sellPrice, waypoint, tradeVolume)]
-
-    for market in markets:
-        waypoint = market.get("waypointSymbol")
-        if not waypoint:
-            continue
-        for good in (market.get("tradeGoods") or []):
-            symbol = good.get("symbol")
-            if not symbol:
-                continue
-            gtype = good.get("type")
-            bp = good.get("purchasePrice")
-            sp = good.get("sellPrice")
-            vol = good.get("tradeVolume") or 0
-            supply = good.get("supply")
-            if gtype == "EXPORT":
-                if bp is None:
-                    continue
-                exports.setdefault(symbol, []).append((bp, waypoint, vol, supply))
-            elif gtype == "IMPORT":
-                if sp is None:
-                    continue
-                imports.setdefault(symbol, []).append((sp, waypoint, supply))
-            elif gtype == "EXCHANGE":
-                if bp is None or sp is None:
-                    continue
-                exchanges.setdefault(symbol, []).append((bp, sp, waypoint, vol))
-
-    # PRIMARY: export -> import supply chain.
-    best: dict = {}
-    best_score = 0
-    for good in set(exports) & set(imports):
-        buy_price, buy_wp, buy_vol, _ = min(exports[good], key=lambda x: x[0])
-        sell_price, sell_wp, _ = max(imports[good], key=lambda x: x[0])
-        if buy_wp == sell_wp:
-            continue
-        margin = int(sell_price - buy_price)
-        if margin < min_margin:
-            continue
-        score = margin * max(buy_vol, 1)
-        if score > best_score:
-            best_score = score
-            best = {
-                "good": good,
-                "buy_at": buy_wp,
-                "sell_at": sell_wp,
-                "profit_per_unit": margin,
-                "volume": buy_vol,
-                "kind": "export→import",
-                "score": score,
-            }
-    if best:
-        return best
-
-    # FALLBACK: cross-market EXCHANGE spreads (no refilling supply chain available).
-    for good, listings in exchanges.items():
-        for buy_price, _, buy_wp, buy_vol in listings:
-            for _, sell_price, sell_wp, _ in listings:
-                if buy_wp == sell_wp:
-                    continue
-                margin = int(sell_price - buy_price)
-                if margin < min_margin:
-                    continue
-                score = margin * max(buy_vol, 1)
-                if score > best_score:
-                    best_score = score
-                    best = {
-                        "good": good,
-                        "buy_at": buy_wp,
-                        "sell_at": sell_wp,
-                        "profit_per_unit": margin,
-                        "volume": buy_vol,
-                        "kind": "exchange",
-                        "score": score,
-                    }
-    return best
+    routes = rank_routes(markets, min_margin=min_margin, sink_supply_cutoff=sink_supply_cutoff)
+    return routes[0] if routes else {}
 
 
 # Backward-compat alias — callers should prefer best_route.

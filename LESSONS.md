@@ -35,11 +35,20 @@ PYTHONPATH=. python plugins/spacetraders/seed_kb.py        # → ~/.protoagent/k
 - **multiplayer** — shared universe, but no direct player trade/gift/combat.
   Collaboration = the shared market economy + jump-gate construction. `st_transfer`
   is between your OWN ships only.
-- **wipe-cycle** — the universe resets every few weeks; it wipes agent/token/ships/
-  credits/contracts. Re-register, re-seed this, re-scan after a wipe.
-- **ship-roles** — frigate (mine+haul), probe (free scout), shuttle/hauler (cargo),
-  mining/siphon drones. Early loop: command ship + hauler + light mining; the
-  hauler's round trip is the bottleneck.
+- **wipe-cycle** — the universe resets **weekly** (Saturday mornings); it wipes agent/
+  token/ships/credits/contracts. The 7-day window is the dominant constraint — bootstrap
+  fast. Auth is two-token (v2.3.0): an ACCOUNT token registers a per-reset AGENT token +
+  175k cr + a COMMAND frigate + a PROBE + a starting contract. Re-register, re-seed this,
+  re-scan after a wipe.
+- **ship-roles** — frigate (pre-fitted mine+siphon+survey+haul), probe (~28k, free scout),
+  light hauler (~393k, 80-cargo — best early trader), mining/siphon drones. The engine
+  classifies by MOUNTS (a mining laser ⇒ miner), not the hull name. Early loop: command
+  ship + hauler + light mining; the hauler's round trip is the bottleneck.
+- **steering-the-engine** — two loops: the deterministic autopilot ENGINE (muscle) + the
+  OODA strategist (brain). Control surface = `st_report` (observe), `st_strategy` (doctrine),
+  `st_tune` (one knob), `st_assign` (pin a ship). One steering change per window, then
+  `memory_ingest` the lesson. The engine enforces saturation damping; I tune the guards, not
+  babysit them. See skill `manage-the-fleet` + `docs/two-loop-fleet.md`.
 - **self-improvement** — record findings (`memory_ingest`), recall before planning
   (`memory_recall`), track the plan in beads, pursue the operator's goal, and note
   capability gaps so they can become new tools/skills/workflows.

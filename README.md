@@ -16,12 +16,16 @@ extension set, all auto-discovered.
 
 | Contribution | What |
 |---|---|
-| **Tools** (31) | register, agent/fleet status, fuel-aware `st_travel`, markets, `st_trade_routes`, contracts, mining, buy/sell, shipyard, and the background **growth engine** (`st_autopilot_start`/`stop`/`status`) |
-| **Subagents** (4) | `navigator`, `trader`, `miner`, `fleet-commander` |
+| **Tools** (34) | register, agent/fleet status, fuel-aware `st_travel`, markets, `st_trade_routes`, contracts, mining, buy/sell, shipyard, the background **growth engine** (`st_autopilot_start`/`stop`/`status`), and the **control surface** — `st_report` (telemetry), `st_strategy` (doctrine), `st_tune` (knobs), `st_assign` (per-ship pins) |
+| **Subagents** (5) | `navigator`, `trader`, `miner`, `fleet-commander`, `strategist` (the OODA brain) |
 | **Workflows** | `procurement-run`, `mining-run`, `fleet-bootstrap` (`workflows/`) |
-| **Skills** | `play-spacetraders`, `run-a-procurement-contract`, `maximize-credits-per-hour` (`skills/`) |
-| **Console view** (ADR 0026) | a **Fleet** rail dashboard — credits, ships + live ETAs, contracts, autopilot, the **galaxy leaderboard standing**, the **wipe countdown**, and the agent's **learned routes** |
+| **Skills** | `manage-the-fleet` (the OODA strategist loop), `maximize-credits-per-hour`, `play-spacetraders`, `run-a-procurement-contract` (`skills/`) |
+| **Console view** (ADR 0026) | a **Fleet** rail dashboard — credits, ships + live ETAs, contracts, autopilot, the active **strategy**, the **strategist decision log**, the **galaxy leaderboard standing**, the **wipe countdown**, and the agent's **learned routes** |
 | **Knowledge** | `LESSONS.md` + `seed_kb.py` (durable lessons) + **trade-route memory** (`routes.py` — the engine learns + recalls profitable routes across windows and wipes) |
+
+**Architecture:** the fleet runs as **two loops** — a deterministic **engine** (the muscle)
+steered by an agentic **OODA strategist** (the brain) between windows. See
+[`docs/two-loop-fleet.md`](docs/two-loop-fleet.md).
 
 ## Install
 
@@ -61,18 +65,25 @@ fleet by role, all guarded against loss:
 - **probes SCOUT** markets (free) → build the price map trade needs;
 - **one cargo ship works CONTRACTS** — the capital base (contracts are capped at one
   active per agent, so they seed, they don't scale);
+- **ships with a mining laser MINE** the nearest asteroid and sell the ore — the engine
+  classifies each ship by its mounts, so a mining drone digs instead of being mis-cast;
 - **every other cargo ship runs the best profitable TRADE route** — the scaling lever,
-  each independent + spread-guarded, **re-evaluated as markets saturate**;
+  each independent + spread-guarded, **re-evaluated as markets saturate**, with built-in
+  **saturation damping** (≈ one `tradeVolume`/visit, glutted importers skipped, haulers
+  diversified across the top routes) so it never crashes its own routes;
 - profit is **reinvested into haulers** once capital is comfortable.
 
 It **learns**: each discovered route is remembered in the knowledge store and recalled
 before re-scanning, so every window — and every fresh start — is smarter than the last.
-A **scheduler tick** keeps it going hands-off; the agent records findings + recalls
-lessons each cycle.
 
-> The universe **resets every few weeks** — durable lessons + learned routes survive
-> (they're the agent's memory); the in-game agent/ships/token don't. After a wipe, just
-> run `fresh_start.py` again — it re-registers, re-seeds, and the engine recalls what it
+Above the engine, the **OODA strategist** (`manage-the-fleet` skill) steers it between
+windows: **Observe** (`st_report`) → **Orient** (recall lessons, compare cr/hr vs the goal)
+→ **Decide** → **Act** (`st_strategy` / `st_tune` / `st_assign`) → **Learn** (`memory_ingest`).
+A **scheduler tick** is the loop's clock; a `spacetraders:credits` **goal** is its terminus.
+
+> The universe **resets weekly** (Saturday mornings) — durable lessons + learned routes
+> survive (they're the agent's memory); the in-game agent/ships/token don't. After a wipe,
+> just run `fresh_start.py` again — it re-registers, re-seeds, and the engine recalls what it
 > learned last cycle. Nothing per-reset is hard-coded.
 
 ### Supply-chain trading (not random arbitrage)

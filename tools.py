@@ -185,6 +185,7 @@ async def st_autopilot_status() -> str:
     Use this to supervise — start the engine with st_autopilot_start, then poll this.
     """
     from . import fleet
+    from . import roles
     try:
         ships = await call("GET", "/my/ships")
     except SpaceTradersError as e:
@@ -193,7 +194,12 @@ async def st_autopilot_status() -> str:
     for s in ships:
         st = s["nav"]["status"]
         cd = s.get("cooldown", {}).get("remainingSeconds", 0)
-        role = "cargo" if s["cargo"]["capacity"] > 0 else "scout (flies free)"
+        if s["cargo"]["capacity"] == 0:
+            role = "scout (flies free)"
+        elif roles.can_mine(s):
+            role = "miner"
+        else:
+            role = "cargo"
         if st == "IN_TRANSIT":
             busy.append(f"{s['symbol']} (in transit, {_eta_seconds(s['nav']) or '?'}s)")
         elif cd:
@@ -245,25 +251,115 @@ async def st_autopilot_stop() -> str:
 
 @tool
 async def st_knobs() -> str:
-    """Read the engine's current strategy knobs (min_margin, buy_buffer, max_ships,
-    probe_buffer, map_target, max_probes) — for auditing how the engine is behaving."""
+    """Read the engine's current strategy knobs — for auditing how the engine is behaving.
+
+    Knobs: min_margin, buy_buffer, max_ships, probe_buffer, map_target, max_probes,
+    reserve_floor (hard cash floor), window_minutes (autopilot window / OODA cadence),
+    sink_volume_mult + sink_supply_cutoff (saturation damping), route_diversify (spread
+    haulers across the top-N routes)."""
     from . import fleet
     return ", ".join(f"{k}={v}" for k, v in fleet.knobs().items())
 
 
 @tool
-async def st_tune(knob: str, value: float) -> str:
-    """Tune one engine knob at runtime (reversible) — takes effect on the running
-    autopilot immediately. Use after auditing/researching to adapt the engine to the map:
-    e.g. st_tune("min_margin", 15) to surface trade routes in a thin market, or
-    st_tune("map_target", 5) to start trading on fewer scouted markets.
+async def st_tune(knob: str, value: str) -> str:
+    """Tune ONE engine knob at runtime (reversible, fine-grained) — takes effect on the
+    running autopilot immediately. This is the strategist's micro-control; for a whole
+    doctrine in one move use st_strategy instead. Examples:
+      st_tune("min_margin", "15")        — surface trade routes in a thin market
+      st_tune("reserve_floor", "100000") — keep a 100k cash cushion (block auto-buys below it)
+      st_tune("window_minutes", "8")     — tighter window → faster OODA cadence
+      st_tune("sink_supply_cutoff", "HIGH") — stop selling into importers already at HIGH supply
 
     Args:
-        knob: one of min_margin, buy_buffer, max_ships, probe_buffer, map_target, max_probes
-        value: the new numeric value
+        knob: min_margin | buy_buffer | max_ships | probe_buffer | map_target | max_probes |
+            reserve_floor | window_minutes | sink_volume_mult | sink_supply_cutoff | route_diversify
+        value: the new value (a number, or a supply tier like "HIGH" for sink_supply_cutoff)
     """
     from . import fleet
     return fleet.set_knob(knob, value)
+
+
+@tool
+async def st_strategy(name: str = "") -> str:
+    """Set or show the fleet STRATEGY preset — a named doctrine that retunes the engine's
+    knobs + role policy in ONE move (vs st_tune's single knobs). Takes effect on the
+    running engine from the next window. Call with no name to show the current strategy
+    and the menu.
+
+    Presets:
+      • balanced       — default: contracts seed, trade compounds, dedicated drones mine
+      • trade-max      — pure arbitrage: mining off, every hold trades, haulers sooner
+      • mining         — mining-heavy: every mining-capable hull digs; a hauler trades/sells
+      • contract-grind — capital-safe: prioritise contracts, conservative reinvestment
+
+    Args:
+        name: the preset to switch to, or "" to show the current strategy + menu.
+    """
+    from . import fleet, strategy
+    if not name:
+        cur = fleet.current_strategy()
+        menu = "\n".join(
+            f"  {'➤' if n == cur['name'] else ' '} {n} — {strategy.PRESETS[n]['blurb']}"
+            for n in strategy.names())
+        return f"strategy: {cur['name']} (mining {'on' if cur['mining'] else 'off'})\n{menu}"
+    return fleet.apply_strategy(name)
+
+
+@tool
+async def st_assign(ship: str, role: str) -> str:
+    """Pin a specific SHIP to a role, overriding the engine's auto-classifier on the next
+    window. Use when your reasoning beats the heuristic — e.g. hold a hauler back to scout,
+    or force the frigate to mine. Pass role "auto" to clear the pin.
+
+    Roles: mine | trade | contract (lead/contract worker) | scout | idle (park it) | auto.
+
+    Args:
+        ship: ship symbol, e.g. "PROTOTRADERS-4".
+        role: the role to pin, or "auto" to clear.
+    """
+    from . import fleet
+    return fleet.set_override(ship, role)
+
+
+@tool
+async def st_report() -> str:
+    """Rich fleet telemetry for OODA OBSERVE — credits + credits/hr trajectory toward 1M,
+    per-ship role/status/health (flags stranded ships), engine state, the live knobs +
+    strategy + per-ship pins, and deterministic HINTS (idle capital, dead routes, stranded
+    ships) to seed your decision. Read this first each time you manage the fleet."""
+    from . import fleet
+    r = await fleet.report()
+    if not r.get("ok"):
+        return f"Error: {r.get('error')}"
+    eng = r["engine"]
+    proj = r["projection"]
+    mining_s = "on" if r["mining"] else "off"
+    run_s = "running" if eng["running"] else "stopped"
+    gained = eng["last_gained"]
+    last_s = f"+{gained:,}" if gained is not None else "—"
+    eta_s = f" · ~{proj['to_1m']}h to 1M" if proj["to_1m"] else ""
+    lines = [
+        f"CREDITS {r['credits']:,} · {r['ships']} ships · strategy {r['strategy']} (mining {mining_s})",
+        f"ENGINE {run_s} · window {eng['window_min']:g}m · last {last_s} cr "
+        f"· {eng['per_hour']:,} cr/hr{eta_s}",
+        "FLEET:",
+    ]
+    for s in r["fleet"]:
+        pin = f" (pinned {s['pinned']})" if s.get("pinned") else ""
+        flag = " ⚠STRANDED" if s["stranded"] else ""
+        lines.append(f"  {s['symbol']} [{s['role']}{pin}] {s['status']} @ {s['at']} "
+                     f"cargo {s['cargo']}{flag}")
+    lines.append("KNOBS: " + ", ".join(f"{k}={v}" for k, v in r["knobs"].items()))
+    if r["hints"]:
+        lines.append("HINTS:")
+        lines += [f"  • {h}" for h in r["hints"]]
+    if r.get("decisions"):
+        lines.append("MY RECENT DECISIONS: "
+                     + " | ".join(f"{d['action']}: {d['detail']}" for d in r["decisions"]))
+    if eng["recent_log"]:
+        lines.append("RECENT: " + " | ".join(eng["recent_log"]))
+    return "\n".join(lines)
 
 
 @tool
@@ -1029,7 +1125,8 @@ def _harden(tools: list) -> list:
 def get_spacetraders_tools() -> list:
     return _harden([
         st_register, st_recover_token, st_agent, st_fleet, st_autopilot_status,
-        st_autopilot_start, st_autopilot_stop, st_knobs, st_tune, st_ship,
+        st_autopilot_start, st_autopilot_stop, st_knobs, st_tune,
+        st_strategy, st_assign, st_report, st_ship,
         st_orbit, st_dock, st_navigate, st_travel, st_plan_route, st_refuel,
         st_transfer, st_shipyard, st_buy_ship,
         st_waypoints, st_market, st_find_market, st_trade_routes,
