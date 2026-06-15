@@ -645,16 +645,17 @@ async def st_buy_ship(waypoint: str, ship_type: str) -> str:
 
 @tool
 async def st_waypoints(system: str, trait: str = "") -> str:
-    """Scan ALL of a system's waypoints (auto-paginated — the COMPLETE list, not page 1),
-    optionally filtered by a trait. Includes each waypoint's x,y coordinates.
+    """Scan a system's waypoints (auto-paginated), optionally filtered by a trait.
 
-    Useful traits: MARKETPLACE, SHIPYARD, ASTEROID, ASTEROID_FIELD, FUEL_STATION,
-    JUMP_GATE. Omit trait to list everything. A system can have dozens of waypoints —
-    this returns them all so you never conclude a waypoint is missing from a partial page.
+    Pass a ``trait`` to get the focused list you actually need (MARKETPLACE, SHIPYARD,
+    ASTEROID, ASTEROID_FIELD, FUEL_STATION, JUMP_GATE) — that's the cheap, common call.
+    Omit it and a big system returns a COMPACT SUMMARY (counts by type + the actionable
+    waypoints) rather than dumping every rock; re-query with a trait for a full filtered
+    list. Each line is ``SYMBOL [TYPE] (x,y)`` plus short flags (market/shipyard/fuel/mineable).
 
     Args:
         system: system symbol, e.g. "X1-DF55".
-        trait: optional trait filter.
+        trait: optional trait filter (recommended).
     """
     base = {"limit": 20}
     if trait:
@@ -674,11 +675,31 @@ async def st_waypoints(system: str, trait: str = "") -> str:
         return f"Error: {e}"
     if not wps:
         return f"No waypoints in {system}" + (f" with trait {trait}" if trait else "")
-    lines = []
-    for w in wps:
-        traits = ",".join(t["symbol"] for t in w.get("traits", []))
-        lines.append(f"  {w['symbol']} [{w['type']}] ({w.get('x')},{w.get('y')}) {traits}")
-    return f"{system} waypoints ({len(wps)}, complete list):\n" + "\n".join(lines)
+
+    _KEY = {"MARKETPLACE": "market", "SHIPYARD": "shipyard", "FUEL_STATION": "fuel"}
+
+    def _row(w: dict) -> str:
+        flags = [_KEY[t["symbol"]] for t in w.get("traits", []) if t["symbol"] in _KEY]
+        if "ASTEROID" in (w.get("type") or ""):
+            flags.append("mineable")
+        tail = " · " + " ".join(flags) if flags else ""
+        return f"  {w['symbol']} [{w['type']}] ({w.get('x')},{w.get('y')}){tail}"
+
+    rows = [_row(w) for w in wps]
+    CAP = 60
+    if trait or len(rows) <= CAP:
+        head = f"{system} waypoints ({len(wps)}{', ' + trait.upper() if trait else ''}):"
+        return head + "\n" + "\n".join(rows)
+
+    # Unfiltered + long → a type summary + only the actionable waypoints (keep the context lean).
+    from collections import Counter
+    by_type = Counter(w.get("type", "?") for w in wps)
+    notable = [r for r in rows if any(f in r for f in ("market", "shipyard", "fuel", "mineable"))]
+    summary = ", ".join(f"{n}×{t}" for t, n in by_type.most_common())
+    return (f"{system}: {len(wps)} waypoints — {summary}.\n"
+            f"Actionable ({len(notable)} markets/shipyards/fuel/asteroids):\n"
+            + "\n".join(notable[:CAP])
+            + "\n(re-query st_waypoints(system, trait=MARKETPLACE|SHIPYARD|ASTEROID|…) for a full filtered list)")
 
 
 @tool
@@ -1112,22 +1133,39 @@ async def st_docs(query: str) -> str:
         desc, enum = sc.get("description") or "", sc.get("enum")
         qz = q.replace(" ", "")  # so "flight mode" matches the "ShipNavFlightMode" schema
         if q in name.lower() or qz in name.lower() or q in desc.lower() or (enum and q in str(enum).lower()):
-            line = f"  [schema] {name}: {desc[:140]}".rstrip()
+            line = f"  [schema] {name}: {desc[:100]}".rstrip()
             hits.append(line + (f" — values: {enum}" if enum else ""))
     if not hits:
         return (f"No SpaceTraders reference matched '{query}'. Try: flight mode, ship type, "
                 f"fuel, cargo, contract, market, navigate, refuel, faction, jump gate.")
-    return f"SpaceTraders reference — '{query}' ({len(hits)} hit(s)):\n" + "\n".join(hits[:18])
+    shown = hits[:12]
+    more = f"\n(+{len(hits) - len(shown)} more — narrow the query)" if len(hits) > len(shown) else ""
+    return f"SpaceTraders reference — '{query}' ({len(hits)} hit(s)):\n" + "\n".join(shown) + more
+
+
+# Backstop cap on a single tool result. The agent loops many tool calls per turn and EVERY
+# prior result rides along in the next call's context, so one fat payload (a giant waypoint
+# dump, a huge market) compounds fast. ~12k chars ≈ 3k tokens is generous for any one result;
+# the targeted tools (st_waypoints/st_docs) stay well under it, this just bounds the worst case.
+_MAX_TOOL_CHARS = 12000
+
+
+def _cap_output(out):
+    if isinstance(out, str) and len(out) > _MAX_TOOL_CHARS:
+        dropped = len(out) - _MAX_TOOL_CHARS
+        return out[:_MAX_TOOL_CHARS] + f"\n… [truncated {dropped:,} chars — narrow the query/filter]"
+    return out
 
 
 def _harden(tools: list) -> list:
     """Belt-and-suspenders: a tool that raises crashes the agent's whole turn, so
     wrap every coroutine to turn ANY error into a readable 'Error: ...' string the
-    model can recover from. (create_agent doesn't expose handle_tool_errors.)"""
+    model can recover from (create_agent doesn't expose handle_tool_errors), and cap a
+    runaway-large result so one payload can't balloon the turn's context."""
     def _wrap(fn):
         async def _safe(**kwargs):
             try:
-                return await fn(**kwargs)
+                return _cap_output(await fn(**kwargs))
             except SpaceTradersError as e:
                 return f"Error: {e}"
             except BaseException as e:  # noqa: BLE001
