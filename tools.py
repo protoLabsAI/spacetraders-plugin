@@ -20,6 +20,11 @@ from .client import SpaceTradersError, call
 # expire server-side (a few minutes); we filter expired ones lazily on use.
 _SURVEYS: dict[str, list[dict]] = {}
 
+# st_travel won't auto-DRIFT a ship farther than this (minutes) — a multi-hour DRIFT (the
+# slow ~1-fuel mode) ties the ship + its cargo up for nothing. Beyond it, st_travel REFUSES
+# so the job picks a closer target; st_navigate(ship, dest, DRIFT) still forces it explicitly.
+_MAX_AUTO_DRIFT_MIN = 30
+
 # Ship purchases above this (credits) pause for operator approval (HITL gate).
 _BUY_APPROVAL_THRESHOLD = 400_000  # gate only BIG buys; routine probes/haulers (~290k)
 # clear within the strategist's reserve rules (autonomous fleet growth shouldn't need
@@ -520,17 +525,32 @@ async def st_travel(ship: str, destination: str) -> str:
     if cap == 0 or fuel >= dist + 1:
         return await st_navigate.ainvoke({"ship": ship, "waypoint": destination, "mode": "CRUISE"})
 
-    # Not enough fuel — go via the nearest fuel station first.
+    # Not enough fuel for a direct CRUISE — route via the nearest fuel station, or DRIFT.
+    speed = (s.get("engine") or {}).get("speed") or 30   # DRIFT ≈ 1 fuel but ~10× slow
+
+    def _drift_min(d: float) -> float:
+        return (d * 250 / max(speed, 1) + 15) / 60       # dist × 250/speed + 15s, in minutes
+
     try:
         fstop = await _nearest_fuel(system, here)
     except SpaceTradersError as e:
         return f"Error: {e}"
     if not fstop or fstop[0] == here:
-        # already at (or no) fuel station yet can't reach dest → DRIFT straight there
+        # No closer fuel station — the only way is a DRIFT straight there. Refuse a marathon:
+        # a multi-hour DRIFT ties the ship + its cargo up for nothing. Skip; let the job pick a
+        # closer target. st_navigate(ship, dest, DRIFT) still forces it if you really mean to.
+        dm = _drift_min(dist)
+        if dm > _MAX_AUTO_DRIFT_MIN:
+            return (f"REFUSED: {destination} is ~{dm:.0f} min away by DRIFT (no fuel stop en route; "
+                    f"cap {_MAX_AUTO_DRIFT_MIN} min) — too far to tie up {ship}. Skipped — pick a closer "
+                    f"target, or st_navigate({ship}, {destination}, DRIFT) to force it.")
         out = await st_navigate.ainvoke({"ship": ship, "waypoint": destination, "mode": "DRIFT"})
         return f"(low fuel, no closer fuel station) {out}"
     fwp, fdist = fstop
     mode = "CRUISE" if fuel >= fdist + 1 else "DRIFT"
+    if mode == "DRIFT" and _drift_min(fdist) > _MAX_AUTO_DRIFT_MIN:
+        return (f"REFUSED: even the nearest fuel stop ({fwp}) is ~{_drift_min(fdist):.0f} min by DRIFT "
+                f"(cap {_MAX_AUTO_DRIFT_MIN} min) — {destination} is out of practical range for {ship}. Skipped.")
     out = await st_navigate.ainvoke({"ship": ship, "waypoint": fwp, "mode": mode})
     return f"FUEL STOP en route to {destination}: {out}\n  → on arrival, call st_travel({ship}, {destination}) again."
 

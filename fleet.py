@@ -94,6 +94,8 @@ async def travel_to(sym: str, dest: str, *, max_hops: int = 12, log=None) -> boo
         out = await T.st_travel.ainvoke({"ship": sym, "destination": dest})
         if log:
             log(f"{sym}: {out.splitlines()[0]}")
+        if out.startswith("REFUSED"):   # too far to auto-DRIFT — don't loop, let the job skip it
+            return False
         await _wait_arrival(sym)
     return False
 
@@ -316,7 +318,8 @@ async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *, log=None)
     so one delivery moves the import price ~one tier-step instead of cratering it (the #1
     way an unattended bot kills its own routes). Raise sink_volume_mult for a thin fleet."""
     cap = (await _ship(sym))["cargo"]["capacity"]
-    await travel_to(sym, buy_wp, log=log)
+    if not await travel_to(sym, buy_wp, log=log):   # too far to auto-DRIFT → skip, don't buy elsewhere
+        return f"skipped {good} trade: couldn't reach buy waypoint {buy_wp} (too far)"
     # Profitability guard: confirm sell (at sell_wp) > buy (here) before committing.
     buy_price, _ = await _good_price(buy_wp, good)
     _, sell_price, sell_vol = await _good_quote(sell_wp, good)
@@ -331,7 +334,8 @@ async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *, log=None)
     held = await _held(sym, good)
     if held == 0:
         return f"could not buy {good} at {buy_wp} (or price ≥ resale — guarded)"
-    await travel_to(sym, sell_wp, log=log)
+    if not await travel_to(sym, sell_wp, log=log):   # bought but the sink is too far to auto-DRIFT
+        return f"bought {held}×{good} but couldn't reach sell waypoint {sell_wp} (too far) — holding"
     await C.call("POST", f"/my/ships/{sym}/dock")
     sold = await _sell(sym, good, held, log=log)
     return f"traded {sold}×{good} (of {held} hauled)"
