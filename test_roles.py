@@ -153,3 +153,29 @@ def test_explicit_mine_pin_is_not_drafted_for_capital_base():
     r = roles.assign_roles([FRIGATE], overrides={"FRIGATE-1": "mine"})
     assert [s["symbol"] for s in r["miners"]] == ["FRIGATE-1"]
     assert r["traders"] == []
+
+
+# --- gas siphoning (st_assign siphon, pin-only) ------------------------------------
+def test_can_siphon_reads_the_gas_siphon_mount():
+    assert roles.can_siphon(SIPHON) is True
+    assert roles.can_siphon(HAULER) is False
+    assert roles.can_siphon(DRONE) is False        # a mining laser is not a gas siphon
+
+
+def test_siphoners_key_present_and_empty_without_a_pin():
+    # siphon is PIN-ONLY — an auto siphon-capable ship trades, it isn't auto-siphoned.
+    r = roles.assign_roles([SIPHON, HAULER])
+    assert r["siphoners"] == []
+    assert "SIPHON-1" in [s["symbol"] for s in r["traders"]]
+
+
+def test_siphon_pin_on_a_capable_ship():
+    r = roles.assign_roles([SIPHON, HAULER], overrides={"SIPHON-1": "siphon"})
+    assert [s["symbol"] for s in r["siphoners"]] == ["SIPHON-1"]
+    assert "SIPHON-1" not in [s["symbol"] for s in r["traders"]]
+
+
+def test_siphon_pin_on_a_non_siphon_ship_routes_to_trade():
+    r = roles.assign_roles([HAULER, DRONE], overrides={"HAULER-1": "siphon"})
+    assert r["siphoners"] == []
+    assert "HAULER-1" in [s["symbol"] for s in r["traders"]]

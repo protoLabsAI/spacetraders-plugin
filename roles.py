@@ -28,14 +28,23 @@ def can_mine(ship: dict) -> bool:
                for m in ship.get("mounts", []) or [])
 
 
+def can_siphon(ship: dict) -> bool:
+    """True iff the ship carries a GAS SIPHON mount (``MOUNT_GAS_SIPHON_*``) — it can siphon
+    gas giants (HYDROCARBON / LIQUID_HYDROGEN / LIQUID_NITROGEN). Higher yield than ore mining
+    (siphon strength ~10–20 vs a laser's 3–5). The COMMAND frigate carries one. Distinct from
+    ``can_mine`` (ore lasers)."""
+    return any("GAS_SIPHON" in (m.get("symbol") or "")
+               for m in ship.get("mounts", []) or [])
+
+
 def _capacity(ship: dict) -> int:
     return (ship.get("cargo") or {}).get("capacity", 0) or 0
 
 
 # The roles an operator can PIN a ship to via st_assign, overriding the auto-classifier.
 # "auto" (or absent) = let assign_roles decide; "contract" = force to the front of the
-# trader list (the lead works contracts); "idle" = park it, no job this window.
-ROLE_NAMES = {"auto", "mine", "trade", "contract", "scout", "idle"}
+# trader list (the lead works contracts); "idle" = park it; "siphon" = work gas giants.
+ROLE_NAMES = {"auto", "mine", "siphon", "trade", "contract", "scout", "idle"}
 
 
 def assign_roles(ships: list, *, mining_enabled: bool = True,
@@ -66,7 +75,7 @@ def assign_roles(ships: list, *, mining_enabled: bool = True,
     — the contract worker — stays the first pinned-contract or first-acquired hauler).
     """
     overrides = overrides or {}
-    probes, miners, traders, lead, auto = [], [], [], [], []
+    probes, miners, siphoners, traders, lead, auto = [], [], [], [], [], []
     for s in ships:
         r = overrides.get(s.get("symbol"), "auto")
         if r == "idle":
@@ -78,6 +87,9 @@ def assign_roles(ships: list, *, mining_enabled: bool = True,
             # routing it to mining just burns the rate budget on failed extracts at wherever
             # it sits. Keep an operator's intent to use it by putting it on trade instead.
             (miners if can_mine(s) else traders).append(s)
+        elif r == "siphon":
+            # Pin-only (gas giants): a ship with no gas-siphon mount can't siphon → trade.
+            (siphoners if can_siphon(s) else traders).append(s)
         elif r == "contract":
             lead.append(s)
         elif r == "trade":
@@ -97,4 +109,4 @@ def assign_roles(ships: list, *, mining_enabled: bool = True,
         draft = sorted(auto_miners, key=_capacity, reverse=True)[0]
         traders = [draft]
         miners = [m for m in miners if m is not draft]
-    return {"probes": probes, "miners": miners, "traders": traders}
+    return {"probes": probes, "miners": miners, "siphoners": siphoners, "traders": traders}

@@ -512,6 +512,38 @@ async def _mining_loop(sym: str, deadline: float, asteroid: str, market: str, *,
     return f"{runs} mining run(s), +{earned:,} cr"
 
 
+async def _siphon_loop(sym: str, deadline: float, giant: str, market: str, *, log=None) -> str:
+    """A siphon ship: fill the hold at a gas giant, sell at a market, repeat. Guarded exactly
+    like _mining_loop — no gas-siphon mount, an unreachable giant, or a rejected siphon all bail
+    cleanly instead of spamming the rate budget."""
+    if not R.can_siphon(await _ship(sym)):
+        if log:
+            log(f"{sym}: no gas-siphon mount — can't siphon (pin a siphon-capable ship instead)")
+        return f"{sym} has no gas siphon — skipped siphoning"
+    runs, earned = 0, 0
+    while _now() < deadline:
+        if not await travel_to(sym, giant, log=log):
+            if log:
+                log(f"{sym}: couldn't reach gas giant {giant} — skipping siphon this window")
+            return f"could not reach {giant} — no siphon"
+        await C.call("POST", f"/my/ships/{sym}/orbit")
+        cap = (await _ship(sym))["cargo"]["capacity"]
+        while (await _ship(sym))["cargo"]["units"] < cap and _now() < deadline:
+            await _wait_cooldown(sym)
+            out = await T.st_siphon.ainvoke({"ship": sym})
+            if "Error" in out:
+                if log:
+                    log(f"{sym}: siphon rejected ({out.strip()[:60]}) — stopping siphon")
+                return f"{sym} can't siphon at {giant}: {out.strip()[:80]}"
+        await travel_to(sym, market, log=log)
+        await C.call("POST", f"/my/ships/{sym}/dock")
+        earned += await _sell_all_here(sym, log=log)
+        runs += 1
+        if log:
+            log(f"{sym}: siphon run {runs} done (+{earned:,} cr total)")
+    return f"{runs} siphon run(s), +{earned:,} cr"
+
+
 # Engine route cache — the ranked trade routes, refreshed each window (a ship present at a
 # market unlocks live prices). The control surface (knobs/presets/pins/decision-log) moved to
 # knobs.py on the shared SDK helpers and is imported at the top of this module.
@@ -707,6 +739,26 @@ async def _mining_targets(system: str) -> list:
     return [(a, m) for a, m, _ in pairs[:4]]
 
 
+async def _siphon_targets(system: str) -> list:
+    """Gas-giant (siphon, sell-market) pairs in ``system``, ranked by shortest round trip —
+    same shape as ``_mining_targets`` but for GAS_GIANT waypoints. Empty ⇒ no gas giant/market."""
+    try:
+        giants = await C.call("GET", f"/systems/{system}/waypoints",
+                              params={"type": "GAS_GIANT", "limit": 20})
+        markets = await C.call("GET", f"/systems/{system}/waypoints",
+                               params={"traits": "MARKETPLACE", "limit": 20})
+    except C.SpaceTradersError:
+        return []
+    if not giants or not markets:
+        return []
+    pairs = []
+    for gg in giants:
+        mkt = min(markets, key=lambda w: _d2(w, gg))
+        pairs.append((gg["symbol"], mkt["symbol"], _d2(gg, mkt)))
+    pairs.sort(key=lambda p: p[2])
+    return [(g, m) for g, m, _ in pairs[:4]]
+
+
 async def autopilot(minutes: float, *, log=None) -> dict:
     """Run the fleet toward max credits for ``minutes`` — the zero-to-million engine.
     Contracts are per-AGENT (one active), so ONE trader works contracts (the capital
@@ -743,7 +795,8 @@ async def autopilot(minutes: float, *, log=None) -> dict:
     jobs = {}
     # Strategy preset (mining on/off) + per-ship pins (st_assign) drive the split.
     role = R.assign_roles(ships, mining_enabled=KNOBS.get("mining"), overrides=overrides())
-    probes, miners, traders = role["probes"], role["miners"], role["traders"]
+    probes, miners, siphoners, traders = (
+        role["probes"], role["miners"], role["siphoners"], role["traders"])
     # Spread probes ACROSS the markets (round-robin) so they cover ground instead of
     # all clustering on the first few — that's what fills the price map fast.
     for i, p in enumerate(probes):
@@ -760,6 +813,15 @@ async def autopilot(minutes: float, *, log=None) -> dict:
             if targets:
                 ast, mkt = targets[i % len(targets)]
                 jobs[s["symbol"]] = _mining_loop(s["symbol"], deadline, ast, mkt, log=log)
+            elif system and market_wps:
+                jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps, log=log)
+    # Siphoners (pin-only, st_assign siphon) work gas giants — same spread/reachability model.
+    if siphoners:
+        gtargets = await _siphon_targets(system) if system else []
+        for i, s in enumerate(siphoners):
+            if gtargets:
+                gg, mkt = gtargets[i % len(gtargets)]
+                jobs[s["symbol"]] = _siphon_loop(s["symbol"], deadline, gg, mkt, log=log)
             elif system and market_wps:
                 jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps, log=log)
     if traders:
@@ -914,6 +976,8 @@ async def report() -> dict:
         label[p["symbol"]] = "scout"
     for m in role["miners"]:
         label[m["symbol"]] = "miner"
+    for x in role["siphoners"]:
+        label[x["symbol"]] = "siphon"
     for i, t in enumerate(role["traders"]):
         label[t["symbol"]] = "contract" if i == 0 else "trader"
 
