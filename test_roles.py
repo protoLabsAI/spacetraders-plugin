@@ -155,16 +155,31 @@ def test_explicit_mine_pin_is_not_drafted_for_capital_base():
     assert r["traders"] == []
 
 
-# --- gas siphoning (st_assign siphon, pin-only) ------------------------------------
+# --- gas siphoning (auto for dedicated drones + st_assign siphon) ------------------
 def test_can_siphon_reads_the_gas_siphon_mount():
     assert roles.can_siphon(SIPHON) is True
     assert roles.can_siphon(HAULER) is False
     assert roles.can_siphon(DRONE) is False        # a mining laser is not a gas siphon
 
 
-def test_siphoners_key_present_and_empty_without_a_pin():
-    # siphon is PIN-ONLY — an auto siphon-capable ship trades, it isn't auto-siphoned.
+def test_dedicated_siphon_drone_auto_siphons():
+    # A gas siphon + NO mining laser ⇒ a dedicated SIPHON_DRONE — auto-classified as a siphoner.
     r = roles.assign_roles([SIPHON, HAULER])
+    assert [s["symbol"] for s in r["siphoners"]] == ["SIPHON-1"]
+    assert "SIPHON-1" not in [s["symbol"] for s in r["traders"]]
+    assert "HAULER-1" in [s["symbol"] for s in r["traders"]]
+
+
+def test_frigate_with_both_mounts_is_not_auto_siphoned():
+    # The COMMAND frigate has a laser AND a siphon — it stays a miner/contract draftee, never
+    # auto-siphoned (so it isn't stolen from the capital base).
+    r = roles.assign_roles([FRIGATE, HAULER])
+    assert "FRIGATE-1" not in [s["symbol"] for s in r["siphoners"]]
+    assert "FRIGATE-1" in [s["symbol"] for s in r["miners"]]
+
+
+def test_mining_disabled_turns_off_auto_siphon_too():
+    r = roles.assign_roles([SIPHON, HAULER], mining_enabled=False)
     assert r["siphoners"] == []
     assert "SIPHON-1" in [s["symbol"] for s in r["traders"]]
 

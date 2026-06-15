@@ -99,11 +99,16 @@ def assign_roles(ships: list, *, mining_enabled: bool = True,
     probes += [s for s in auto if _capacity(s) == 0]
     auto_cargo = [s for s in auto if _capacity(s) > 0]
     if mining_enabled:
+        # DEDICATED extractors auto-classify: a mining laser ⇒ miner; a gas siphon with NO laser
+        # ⇒ siphoner (a SIPHON_DRONE). A ship with BOTH (the COMMAND frigate) stays a miner /
+        # contract draftee — never auto-siphoned, so it isn't stolen from the capital base.
         auto_miners = [s for s in auto_cargo if can_mine(s)]
-        auto_traders = [s for s in auto_cargo if not can_mine(s)]
+        auto_siphoners = [s for s in auto_cargo if can_siphon(s) and not can_mine(s)]
+        auto_traders = [s for s in auto_cargo if not can_mine(s) and not can_siphon(s)]
     else:
-        auto_miners, auto_traders = [], list(auto_cargo)
+        auto_miners, auto_siphoners, auto_traders = [], [], list(auto_cargo)
     miners += auto_miners
+    siphoners += auto_siphoners
     traders = lead + traders + auto_traders
     if not traders and auto_miners:
         draft = sorted(auto_miners, key=_capacity, reverse=True)[0]
