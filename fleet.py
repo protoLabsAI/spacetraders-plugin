@@ -543,6 +543,14 @@ async def _ranked_routes(system: str, market_wps: list) -> list:
         top = ranked[0]
         routes.remember_route(system, top["good"], top["buy_at"], top["sell_at"],
                               top["profit_per_unit"])
+    else:
+        # Live scan is dry (thin/aged price map) — instead of idling, fall back to routes we
+        # LEARNED before (across windows/wipes). job_trade re-checks live prices at the buy/sell
+        # legs before committing, so a stale recall is skipped, not a loss — and visiting the buy
+        # waypoint re-lights that market for the price map. This is the engine USING what it learns.
+        ranked = [{"good": r["good"], "buy_at": r["buy_at"], "sell_at": r["sell_at"],
+                   "profit_per_unit": r["margin"], "volume": 0, "kind": "recalled",
+                   "score": r["margin"]} for r in routes.recall_routes(system)]
     _ROUTE_CACHE.update(at=now, routes=ranked)
     return ranked
 
@@ -594,8 +602,14 @@ async def _contract_then_trade(sym: str, deadline: float, claimed: set, lock, sy
     return res
 
 
+# Conservative ship-cost estimates (cr) — for the reserve-floor guard before a reinvest buy.
+_SHIP_COST = {"SHIP_PROBE": 40_000, "SHIP_LIGHT_HAULER": 450_000}
+
+
 async def _buy_ship_at_yard(ships: list, system: str, ship_type: str, *, log=None) -> bool:
-    """Ferry a free-flying probe to a shipyard and buy ``ship_type``. Best-effort."""
+    """Ferry a free-flying probe (or any ship) to a shipyard that SELLS ``ship_type`` and buy it.
+    Best-effort. Picks a yard whose ``shipTypes`` includes the type — buying at the first
+    shipyard regardless used to silently error + no-op when that yard didn't stock it."""
     try:
         yards = await C.call("GET", f"/systems/{system}/waypoints",
                              params={"traits": "SHIPYARD", "limit": 20})
@@ -603,7 +617,19 @@ async def _buy_ship_at_yard(ships: list, system: str, ship_type: str, *, log=Non
         return False
     if not yards:
         return False
-    yard = yards[0]["symbol"]
+    yard = None
+    for y in yards:
+        try:
+            sy = await C.call("GET", f"/systems/{system}/waypoints/{y['symbol']}/shipyard")
+        except C.SpaceTradersError:
+            continue
+        if any(t.get("type") == ship_type for t in sy.get("shipTypes", [])):
+            yard = y["symbol"]
+            break
+    if yard is None:
+        if log:
+            log(f"reinvest skipped: no shipyard in {system} sells {ship_type}")
+        return False
     mover = next((s for s in ships if s["fuel"].get("capacity", 0) == 0), None) or (ships[0] if ships else None)
     if mover is None or not await travel_to(mover["symbol"], yard, log=log):
         return False
@@ -621,59 +647,40 @@ async def _buy_ship_at_yard(ships: list, system: str, ship_type: str, *, log=Non
 async def _maybe_reinvest(ships: list, system: str, *, log=None) -> None:
     """Self-scaling reinvestment: fill the price map FIRST with cheap probes (parallel
     scouting → arbitrage surfaces sooner), then scale trade with haulers once the map is
-    covered and capital is comfortable."""
+    covered and capital is comfortable. Every buy also keeps credits at/above reserve_floor."""
     if len(ships) >= KNOBS.get("max_ships"):
         return
-    if await _credits() < KNOBS.get("reserve_floor"):   # hard cash floor — protect the cushion
-        return
+    credits = await _credits()
+    floor = KNOBS.get("reserve_floor")
+
+    def _affordable(ship_type: str, buffer_knob: str) -> bool:
+        # comfortable enough (buffer) AND the buy won't dip below the hard cash floor
+        return credits >= KNOBS.get(buffer_knob) and credits - _SHIP_COST.get(ship_type, 0) >= floor
+
     from . import prices
     coverage = prices.stats(system).get("markets", 0)
     probes = sum(1 for s in ships if s["fuel"].get("capacity", 0) == 0)
     if coverage < KNOBS.get("map_target") and probes < KNOBS.get("max_probes"):
-        if await _credits() >= KNOBS.get("probe_buffer"):
+        if _affordable("SHIP_PROBE", "probe_buffer"):
             await _buy_ship_at_yard(ships, system, "SHIP_PROBE", log=log)
-    elif await _credits() >= KNOBS.get("buy_buffer"):
+    elif _affordable("SHIP_LIGHT_HAULER", "buy_buffer"):
         await _buy_ship_at_yard(ships, system, "SHIP_LIGHT_HAULER", log=log)
 
 
-async def _maybe_buy_hauler(ships: list, system: str, *, log=None) -> None:
-    """Reinvest profit into a LIGHT_HAULER when capital is comfortable and there's
-    room to grow. Best-effort: a probe (flies free) ferries to a shipyard to buy it;
-    the new hauler joins the trade rotation next window. Guarded by KNOBS.get("buy_buffer")."""
-    if len(ships) >= KNOBS.get("max_ships") or await _credits() < KNOBS.get("buy_buffer"):
-        return
-    try:
-        yards = await C.call("GET", f"/systems/{system}/waypoints",
-                             params={"traits": "SHIPYARD", "limit": 20})
-    except C.SpaceTradersError:
-        return
-    if not yards:
-        return
-    yard = yards[0]["symbol"]
-    mover = next((s for s in ships if s["fuel"].get("capacity", 0) == 0), None)  # probe = free
-    if mover is None:
-        return
-    if not await travel_to(mover["symbol"], yard, log=log):
-        return
-    try:
-        r = await C.call("POST", "/my/ships",
-                         json={"shipType": "SHIP_LIGHT_HAULER", "waypointSymbol": yard})
-        if log:
-            log(f"reinvest: bought {r['ship']['symbol']} (LIGHT_HAULER) @ {yard}")
-    except C.SpaceTradersError as e:
-        if log:
-            log(f"reinvest skipped: {e}")
+def _d2(a: dict, b: dict) -> int:
+    return (a.get("x", 0) - b.get("x", 0)) ** 2 + (a.get("y", 0) - b.get("y", 0)) ** 2
 
 
-async def _mining_targets(system: str) -> tuple | None:
-    """Find a mineable asteroid + the nearest market to sell ore at, in ``system``.
+async def _mining_targets(system: str) -> list:
+    """Mineable (asteroid, sell-market) pairs in ``system``, ranked by SHORTEST extract→sell
+    round trip first — so the engine mines the most CENTRAL asteroids (near the markets =
+    near the system core = reachable without a marathon DRIFT), not an arbitrary ``asteroids[0]``
+    that a low-fuel drone can't get to (which, with the travel drift-cap, left miners idle).
 
-    Returns ``(asteroid_wp, sell_market_wp)`` or ``None`` if the system has no asteroid
-    or no market — in which case a miner falls back to trade rather than being stranded
-    at a rock with nowhere to sell. Prefers an ENGINEERED_ASTEROID (the designated
-    mining hub) over a raw field/asteroid, and picks the market closest to it by x,y so
-    each extract→sell round trip is short. Queried by type/trait like the rest of the
-    engine (cf. the SHIPYARD/MARKETPLACE scans)."""
+    Returns a list so the autopilot can SPREAD several miners across different asteroids/markets
+    instead of piling them all on one rock + one buyer (which craters that ore's price). Empty
+    list ⇒ no asteroid or no market; the miner falls back to trade. Prefers ENGINEERED_ASTEROIDs.
+    """
     async def _of_type(t: str) -> list:
         try:
             return await C.call("GET", f"/systems/{system}/waypoints",
@@ -684,18 +691,20 @@ async def _mining_targets(system: str) -> tuple | None:
                  or await _of_type("ASTEROID_FIELD")
                  or await _of_type("ASTEROID"))
     if not asteroids:
-        return None
+        return []
     try:
         markets = await C.call("GET", f"/systems/{system}/waypoints",
                                params={"traits": "MARKETPLACE", "limit": 20})
     except C.SpaceTradersError:
-        return None
+        return []
     if not markets:
-        return None
-    ast = asteroids[0]
-    nearest = min(markets, key=lambda w: (w.get("x", 0) - ast.get("x", 0)) ** 2
-                  + (w.get("y", 0) - ast.get("y", 0)) ** 2)
-    return ast["symbol"], nearest["symbol"]
+        return []
+    pairs = []
+    for ast in asteroids:
+        mkt = min(markets, key=lambda w: _d2(w, ast))
+        pairs.append((ast["symbol"], mkt["symbol"], _d2(ast, mkt)))
+    pairs.sort(key=lambda p: p[2])                       # shortest round trip / most central first
+    return [(a, m) for a, m, _ in pairs[:4]]
 
 
 async def autopilot(minutes: float, *, log=None) -> dict:
@@ -741,14 +750,16 @@ async def autopilot(minutes: float, *, log=None) -> dict:
         if market_wps:
             share = market_wps[i::len(probes)] or market_wps
             jobs[p["symbol"]] = job_scout(p["symbol"], share, deadline, log=log)
-    # Miners dig at the nearest asteroid and sell the ore. If the system has no asteroid
-    # (or no market for it), fall back to trade so the ship still earns — never stranded.
+    # Miners dig at a CENTRAL asteroid and sell the ore — spread round-robin across the ranked
+    # (asteroid, market) pairs so several miners don't pile on one rock + one buyer (saturation)
+    # and so each gets a reachable target. If the system has no asteroid/market, fall back to
+    # trade so the ship still earns — never stranded.
     if miners:
-        targets = await _mining_targets(system) if system else None
-        for s in miners:
+        targets = await _mining_targets(system) if system else []
+        for i, s in enumerate(miners):
             if targets:
-                jobs[s["symbol"]] = _mining_loop(
-                    s["symbol"], deadline, targets[0], targets[1], log=log)
+                ast, mkt = targets[i % len(targets)]
+                jobs[s["symbol"]] = _mining_loop(s["symbol"], deadline, ast, mkt, log=log)
             elif system and market_wps:
                 jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps, log=log)
     if traders:
