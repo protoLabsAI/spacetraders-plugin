@@ -23,7 +23,17 @@ _SURVEYS: dict[str, list[dict]] = {}
 # st_travel won't auto-DRIFT a ship farther than this (minutes) — a multi-hour DRIFT (the
 # slow ~1-fuel mode) ties the ship + its cargo up for nothing. Beyond it, st_travel REFUSES
 # so the job picks a closer target; st_navigate(ship, dest, DRIFT) still forces it explicitly.
+# Tunable via the `max_drift_min` engine knob (this is the fallback if the knob isn't loaded).
 _MAX_AUTO_DRIFT_MIN = 30
+
+
+def _max_drift_min() -> float:
+    """The live drift cap (knob `max_drift_min`), falling back to the constant off-host."""
+    try:
+        from .knobs import KNOBS
+        return float(KNOBS.get("max_drift_min"))
+    except Exception:  # noqa: BLE001 — knob/host not available → use the default
+        return float(_MAX_AUTO_DRIFT_MIN)
 
 # Ship purchases above this (credits) pause for operator approval (HITL gate).
 _BUY_APPROVAL_THRESHOLD = 400_000  # gate only BIG buys; routine probes/haulers (~290k)
@@ -528,6 +538,7 @@ async def st_travel(ship: str, destination: str) -> str:
 
     # Not enough fuel for a direct CRUISE — route via the nearest fuel station, or DRIFT.
     speed = (s.get("engine") or {}).get("speed") or 30   # DRIFT ≈ 1 fuel but ~10× slow
+    cap_min = _max_drift_min()                            # tunable via the max_drift_min knob
 
     def _drift_min(d: float) -> float:
         return (d * 250 / max(speed, 1) + 15) / 60       # dist × 250/speed + 15s, in minutes
@@ -541,17 +552,17 @@ async def st_travel(ship: str, destination: str) -> str:
         # a multi-hour DRIFT ties the ship + its cargo up for nothing. Skip; let the job pick a
         # closer target. st_navigate(ship, dest, DRIFT) still forces it if you really mean to.
         dm = _drift_min(dist)
-        if dm > _MAX_AUTO_DRIFT_MIN:
+        if dm > cap_min:
             return (f"REFUSED: {destination} is ~{dm:.0f} min away by DRIFT (no fuel stop en route; "
-                    f"cap {_MAX_AUTO_DRIFT_MIN} min) — too far to tie up {ship}. Skipped — pick a closer "
+                    f"cap {cap_min:.0f} min) — too far to tie up {ship}. Skipped — pick a closer "
                     f"target, or st_navigate({ship}, {destination}, DRIFT) to force it.")
         out = await st_navigate.ainvoke({"ship": ship, "waypoint": destination, "mode": "DRIFT"})
         return f"(low fuel, no closer fuel station) {out}"
     fwp, fdist = fstop
     mode = "CRUISE" if fuel >= fdist + 1 else "DRIFT"
-    if mode == "DRIFT" and _drift_min(fdist) > _MAX_AUTO_DRIFT_MIN:
+    if mode == "DRIFT" and _drift_min(fdist) > cap_min:
         return (f"REFUSED: even the nearest fuel stop ({fwp}) is ~{_drift_min(fdist):.0f} min by DRIFT "
-                f"(cap {_MAX_AUTO_DRIFT_MIN} min) — {destination} is out of practical range for {ship}. Skipped.")
+                f"(cap {cap_min:.0f} min) — {destination} is out of practical range for {ship}. Skipped.")
     out = await st_navigate.ainvoke({"ship": ship, "waypoint": fwp, "mode": mode})
     return f"FUEL STOP en route to {destination}: {out}\n  → on arrival, call st_travel({ship}, {destination}) again."
 

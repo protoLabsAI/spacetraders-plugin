@@ -38,6 +38,8 @@ KNOBS = (
     .define("max_probes", 5, lo=0, help="parallel scouts")
     .define("reserve_floor", 0, lo=0, help="hard cash floor — no auto-buy below this")
     .define("window_minutes", 15.0, lo=1.0, help="autopilot window length / OODA cadence (min)")
+    .define("max_drift_min", 30.0, lo=1.0,
+            help="st_travel refuses an auto-DRIFT leg longer than this (min) — raise for reach")
     .define("sink_volume_mult", 1.0, lo=0.1, help="sell at most mult×(sink tradeVolume) per visit")
     .define("sink_supply_cutoff", "ABUNDANT",
             choices=["SCARCE", "LIMITED", "MODERATE", "HIGH", "ABUNDANT"],
