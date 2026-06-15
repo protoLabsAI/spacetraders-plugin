@@ -397,6 +397,7 @@ async function poll(){
 function render(d){
   LAST_D = d;
   const body = document.getElementById("body");
+  const esc = s => (''+s).replace(/&/g,'&amp;').replace(/</g,'&lt;');  // local to render() (renderMap has its own)
   if(d.error){
     document.getElementById("who").textContent = "";
     body.innerHTML = '<div class="pl-callout pl-callout--error"><div class="pl-callout__body">'+

@@ -940,25 +940,43 @@ async def st_sell(ship: str, good: str, units: int) -> str:
 
 @tool
 async def st_contracts() -> str:
-    """List your contracts — terms, pay, deadline, and accepted/fulfilled state."""
+    """List your ACTIONABLE contracts — terms, pay, deadline, and what to do next.
+
+    Fulfilled contracts are DONE (payout collected) — they're summarized, not listed,
+    so you don't try to act on them again."""
     try:
         cs = await call("GET", "/my/contracts")
     except SpaceTradersError as e:
         return f"Error: {e}"
     if not cs:
-        return "No contracts."
+        return "No contracts. Negotiate one with st_negotiate_contract (a ship at a faction waypoint)."
+    active = [c for c in cs if not c.get("fulfilled")]
+    done = [c for c in cs if c.get("fulfilled")]
     lines = []
-    for c in cs:
+    for c in active:
         terms = c.get("terms", {})
         pay = terms.get("payment", {})
+        deliveries = terms.get("deliver", [])
         deliver = "; ".join(
             f"{d['unitsFulfilled']}/{d['unitsRequired']} {d['tradeSymbol']} → {d['destinationSymbol']}"
-            for d in terms.get("deliver", [])
-        ) or "—"
-        state = "fulfilled" if c.get("fulfilled") else ("accepted" if c.get("accepted") else "OPEN")
-        lines.append(f"  {c['id']} [{c['type']}, {state}] pay {pay.get('onAccepted', 0)}+"
-                     f"{pay.get('onFulfilled', 0)} cr | deliver: {deliver} | by {terms.get('deadline', '?')}")
-    return f"Contracts ({len(cs)}):\n" + "\n".join(lines)
+            for d in deliveries) or "—"
+        ready = c.get("accepted") and deliveries and all(
+            d.get("unitsFulfilled", 0) >= d.get("unitsRequired", 0) for d in deliveries)
+        if ready:
+            nxt = "→ READY TO FULFILL (st_fulfill_contract)"
+        elif c.get("accepted"):
+            nxt = "→ deliver the goods (st_deliver), then fulfill"
+        else:
+            nxt = "→ OPEN: accept it (st_accept_contract) to collect the advance"
+        lines.append(f"  {c['id']} [{c['type']}] pay {pay.get('onAccepted', 0)}+"
+                     f"{pay.get('onFulfilled', 0)} cr | deliver: {deliver} | by {terms.get('deadline', '?')}\n"
+                     f"      {nxt}")
+    head = (f"Active contracts ({len(active)}):\n" + "\n".join(lines)) if active else "No active contracts."
+    if done:
+        head += f"\n({len(done)} already fulfilled — DONE, do not fulfill again.)"
+    if not active:
+        head += " Negotiate a new one with st_negotiate_contract."
+    return head
 
 
 @tool
@@ -1030,6 +1048,11 @@ async def st_fulfill_contract(contract_id: str) -> str:
     try:
         d = await call("POST", f"/my/contracts/{contract_id}/fulfill")
     except SpaceTradersError as e:
+        # Already fulfilled (4504) is DONE, not a failure — return a terminal, non-error
+        # message so the agent moves on instead of retrying the same call (the 4504 spam).
+        if getattr(e, "code", None) == 4504 or "already been fulfilled" in str(e).lower():
+            return (f"Contract {contract_id} is already fulfilled — payout already collected, "
+                    f"nothing to do. Don't retry; negotiate a new contract (st_negotiate_contract).")
         return f"Error: {e}"
     ag = d.get("agent", {})
     return f"✦ Contract {contract_id} FULFILLED. Credits now {ag.get('credits', '?'):,}."
