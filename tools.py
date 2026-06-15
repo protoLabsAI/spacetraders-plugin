@@ -318,7 +318,8 @@ async def st_assign(ship: str, role: str) -> str:
     window. Use when your reasoning beats the heuristic — e.g. hold a hauler back to scout,
     or force the frigate to mine. Pass role "auto" to clear the pin.
 
-    Roles: mine | trade | contract (lead/contract worker) | scout | idle (park it) | auto.
+    Roles: mine | siphon (gas giants — needs a gas-siphon mount, e.g. the frigate) | trade |
+    contract (lead/contract worker) | scout | idle (park it) | auto.
 
     Args:
         ship: ship symbol, e.g. "PROTOTRADERS-4".
@@ -900,6 +901,25 @@ async def st_extract(ship: str, prefer: str = "") -> str:
 
 
 @tool
+async def st_siphon(ship: str) -> str:
+    """Siphon gases from a GAS_GIANT (ship must be in ORBIT at a gas giant, with a gas-siphon
+    mount). Yields HYDROCARBON / LIQUID_HYDROGEN / LIQUID_NITROGEN into cargo and starts a
+    cooldown — higher yield than ore mining (siphon strength ~10–20 vs a laser's 3–5).
+
+    Args:
+        ship: ship symbol (must carry a MOUNT_GAS_SIPHON_*).
+    """
+    try:
+        d = await call("POST", f"/my/ships/{ship}/siphon")
+    except SpaceTradersError as e:
+        return f"Error: {e}"
+    y = d.get("siphon", {}).get("yield", {})
+    cd = d.get("cooldown", {}).get("remainingSeconds", "?")
+    return (f"{ship} siphoned {y.get('units', '?')}×{y.get('symbol', '?')} | "
+            f"cooldown {cd}s | {_cargo_line(d.get('cargo', {}))}")
+
+
+@tool
 async def st_jettison(ship: str, good: str, units: int) -> str:
     """Dump cargo into space — free up the hold for what you actually want.
 
@@ -1212,7 +1232,7 @@ def get_spacetraders_tools() -> list:
         st_orbit, st_dock, st_navigate, st_travel, st_plan_route, st_refuel,
         st_transfer, st_shipyard, st_buy_ship,
         st_waypoints, st_market, st_find_market, st_trade_routes,
-        st_survey, st_extract, st_jettison, st_purchase, st_sell,
+        st_survey, st_extract, st_siphon, st_jettison, st_purchase, st_sell,
         st_contracts, st_accept_contract, st_negotiate_contract,
         st_deliver, st_fulfill_contract,
         st_docs,

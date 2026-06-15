@@ -25,7 +25,8 @@ _TRADE_TOOLS = ["st_ship", "st_autopilot_status", "st_find_market", "st_market",
                 "st_purchase", "st_sell", "st_transfer", "st_shipyard", "st_buy_ship",
                 "st_contracts", "st_accept_contract", "st_negotiate_contract",
                 "st_deliver", "st_fulfill_contract"]
-_MINE_TOOLS = ["st_ship", "st_autopilot_status", "st_orbit", "st_survey", "st_extract", "st_jettison"]
+_MINE_TOOLS = ["st_ship", "st_autopilot_status", "st_orbit", "st_survey", "st_extract",
+               "st_siphon", "st_jettison"]
 
 NAVIGATOR = SubagentConfig(
     name="navigator",
