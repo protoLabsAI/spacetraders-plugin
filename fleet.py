@@ -373,6 +373,25 @@ def _now() -> float:
     return asyncio.get_event_loop().time()
 
 
+async def _cruise_reachable(system: str, frm: str, to: str, fuel_cap) -> bool:
+    """Can a ship CRUISE from ``frm`` to ``to`` (fast) — directly within one tank, or via a fuel
+    station within CRUISE range to hop from? False ⇒ only a multi-hour DRIFT would reach it (the
+    leg that wedges a contract ship for hours, e.g. the J58 delivery). Fuel-free ships (probes)
+    are always reachable. Best-effort: on any lookup failure it returns True, so the guard never
+    false-declines a workable contract."""
+    if not fuel_cap:
+        return True
+    try:
+        if await T._distance(system, frm, to) <= fuel_cap:
+            return True                      # one CRUISE covers it
+        fstop = await T._nearest_fuel(system, frm)
+    except C.SpaceTradersError:
+        return True                          # can't tell → don't false-decline
+    if not fstop or fstop[0] == frm:
+        return False                         # no fuel station to break the leg up → long DRIFT only
+    return fstop[1] <= fuel_cap              # a fuel station is within one CRUISE → can hop + continue
+
+
 async def _contract_loop(sym: str, deadline: float, claimed: set, lock, *, log=None) -> str:
     """A cargo ship: claim/negotiate a procurement contract, work it, repeat."""
     hq = (await C.call("GET", "/my/agent")).get("headquarters")  # negotiate at a faction waypoint
@@ -420,11 +439,11 @@ async def _contract_loop(sym: str, deadline: float, claimed: set, lock, *, log=N
             try:
                 deliver_wp = ndv["destinationSymbol"]
                 fuel_cap = (await _ship(sym))["fuel"].get("capacity") or 400
-                dist = await T._distance(T._system_of(deliver_wp), buys[0], deliver_wp)
-                if dist > fuel_cap * 1.5:
-                    return (f"{n} done; declined {g} contract — delivery {deliver_wp} is "
-                            f"{dist:.0f}u from the source (> ~{fuel_cap} range), too far to work "
-                            f"reliably in a window")
+                if not await _cruise_reachable(T._system_of(deliver_wp), buys[0], deliver_wp, fuel_cap):
+                    return (f"{n} done; declined {g} contract — delivery {deliver_wp} is only "
+                            f"reachable from the source ({buys[0]}) by a multi-hour DRIFT (no CRUISE "
+                            f"route within fuel range). A far contract just wedges the ship for hours; "
+                            f"working in-range trade + banking toward a longer-range hauler instead.")
             except Exception:  # noqa: BLE001 — the guard must never crash the loop
                 pass
             cid = ct["id"]

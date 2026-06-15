@@ -10,9 +10,16 @@ immediately. Host import (``graph.sdk``) — loaded only when the engine is, at 
 
 from __future__ import annotations
 
+import json
+import logging
+import os
+from pathlib import Path
+
 from graph.sdk import DecisionLog, Knobs
 
 from . import roles as _roles
+
+_log = logging.getLogger("spacetraders.knobs")
 
 # The audit trail — every control-surface change the strategist makes (tune / strategy / pin).
 DLOG = DecisionLog(cap=40)
@@ -49,6 +56,49 @@ _STRATEGY = {"name": "balanced"}   # active preset name (KNOBS holds the values,
 _OVERRIDES: dict = {}              # {ship_symbol: role} per-ship pins (st_assign)
 
 
+# ── persistence ────────────────────────────────────────────────────────────────────────
+# Knobs live in an in-memory KNOBS singleton, so a server RESTART or plugin reload would reset
+# every tune back to the defaults (the systemic "buy_buffer keeps reverting to 600K"). Persist
+# the tuned values to a per-agent state file next to the scoped secrets and reload them at
+# startup, so a strategist's tunes survive restarts. (Per-ship pins are intentionally NOT
+# persisted — a stale pin is what mis-mined at J58; they should reset on restart.)
+def _state_path() -> Path:
+    try:
+        from graph.config_io import SECRETS_YAML_PATH   # the scoped, per-agent config dir
+        return Path(SECRETS_YAML_PATH).parent / "spacetraders_knobs.json"
+    except Exception:  # noqa: BLE001 — outside the host (tests / fresh_start)
+        base = os.environ.get("PROTOAGENT_CONFIG_DIR") or str(Path.home() / ".protoagent")
+        return Path(base) / "spacetraders_knobs.json"
+
+
+def _save() -> None:
+    try:
+        p = _state_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"strategy": _STRATEGY["name"], "knobs": KNOBS.values()}))
+    except Exception as e:  # noqa: BLE001 — persistence must never break a tune
+        _log.debug("knob persist failed: %s", e)
+
+
+def _load() -> None:
+    try:
+        p = _state_path()
+        if not p.exists():
+            return
+        data = json.loads(p.read_text())
+        for k, v in (data.get("knobs") or {}).items():
+            KNOBS.set(k, v)               # coerces + clamps + ignores unknown knobs
+        name = (data.get("strategy") or "").strip()
+        if name in KNOBS.presets():
+            _STRATEGY["name"] = name
+        _log.info("restored persisted knobs (strategy=%s)", _STRATEGY["name"])
+    except Exception as e:  # noqa: BLE001
+        _log.debug("knob restore failed: %s", e)
+
+
+_load()   # restore tuned values at import (when the engine first loads, at runtime)
+
+
 def knobs() -> dict:
     """Current knob name -> value (audit / telemetry)."""
     return KNOBS.values()
@@ -60,11 +110,13 @@ def decisions() -> list:
 
 
 def set_knob(name: str, value) -> str:
-    """Tune one knob (typed-coerced, clamped, validated); log the change to the audit trail."""
+    """Tune one knob (typed-coerced, clamped, validated); log the change + persist it so it
+    survives a restart."""
     before = KNOBS.values()
     msg = KNOBS.set(name, value)
     if KNOBS.values() != before:                 # only a real change is a decision
         DLOG.record("tune", msg)
+        _save()
     return msg
 
 
@@ -75,12 +127,18 @@ def current_strategy() -> dict:
 
 def apply_strategy(name: str) -> str:
     """Switch to a named strategy preset (resets knobs to defaults, applies the preset's
-    overrides incl. the `mining` flag). Takes effect on the running engine next window."""
+    overrides incl. the `mining` flag); persisted. Re-applying the CURRENT strategy is a
+    no-op so a redundant call doesn't wipe manual tunes back to the preset's values."""
+    want = (name or "").strip()
+    if want and want == _STRATEGY["name"] and want in KNOBS.presets():
+        return (f"already on strategy {want} — knobs unchanged (st_tune to adjust, or "
+                f"st_strategy a different preset to reset to its doctrine)")
     msg = KNOBS.apply_preset(name)
     if msg.startswith("unknown preset"):
         return msg
-    _STRATEGY["name"] = (name or "").strip()
+    _STRATEGY["name"] = want
     DLOG.record("strategy", f"→ {_STRATEGY['name']}")
+    _save()
     return msg
 
 
