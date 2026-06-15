@@ -29,7 +29,9 @@ DLOG = DecisionLog(cap=40)
 KNOBS = (
     Knobs()
     .define("min_margin", 30, lo=0, help="cr/unit floor below which a route isn't worth the fuel")
-    .define("buy_buffer", 600_000, lo=0, help="reinvest a hauler once credits exceed this")
+    .define("buy_buffer", 600_000, lo=0, help="reinvest a light hauler once credits exceed this")
+    .define("heavy_buffer", 1_500_000, lo=0,
+            help="buy a long-range HEAVY_FREIGHTER above this (unlocks far contracts/routes)")
     .define("max_ships", 8, lo=1, help="cap on auto-bought fleet size")
     .define("probe_buffer", 150_000, lo=0, help="keep this reserve before scouting-buys")
     .define("map_target", 8, lo=1, help="markets in the price map before arbitrage surfaces")

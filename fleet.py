@@ -635,7 +635,8 @@ async def _contract_then_trade(sym: str, deadline: float, claimed: set, lock, sy
 
 
 # Conservative ship-cost estimates (cr) — for the reserve-floor guard before a reinvest buy.
-_SHIP_COST = {"SHIP_PROBE": 40_000, "SHIP_LIGHT_HAULER": 450_000}
+_SHIP_COST = {"SHIP_PROBE": 40_000, "SHIP_LIGHT_HAULER": 450_000, "SHIP_HEAVY_FREIGHTER": 1_500_000}
+_LONG_RANGE_FUEL = 1500   # a hull with this fuel cap can reach far contracts/routes a hauler can't
 
 
 async def _buy_ship_at_yard(ships: list, system: str, ship_type: str, *, log=None) -> bool:
@@ -692,9 +693,15 @@ async def _maybe_reinvest(ships: list, system: str, *, log=None) -> None:
     from . import prices
     coverage = prices.stats(system).get("markets", 0)
     probes = sum(1 for s in ships if s["fuel"].get("capacity", 0) == 0)
+    have_long_range = any(s["fuel"].get("capacity", 0) >= _LONG_RANGE_FUEL for s in ships)
     if coverage < KNOBS.get("map_target") and probes < KNOBS.get("max_probes"):
         if _affordable("SHIP_PROBE", "probe_buffer"):
             await _buy_ship_at_yard(ships, system, "SHIP_PROBE", log=log)
+    elif not have_long_range and _affordable("SHIP_HEAVY_FREIGHTER", "heavy_buffer"):
+        # Range-upgrade rung: once very comfortable and still all short-range haulers, buy a
+        # long-range HEAVY_FREIGHTER (2300 fuel + big hold) — far contracts/routes a 600-fuel
+        # light hauler can't reach (and the drift-cap correctly declines) become workable.
+        await _buy_ship_at_yard(ships, system, "SHIP_HEAVY_FREIGHTER", log=log)
     elif _affordable("SHIP_LIGHT_HAULER", "buy_buffer"):
         await _buy_ship_at_yard(ships, system, "SHIP_LIGHT_HAULER", log=log)
 
