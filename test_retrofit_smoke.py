@@ -27,9 +27,19 @@ def knobs_mod():
     return importlib.import_module(f"{pkg.__name__}.knobs")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_knob_state(knobs_mod, tmp_path, monkeypatch):
+    """Persist to a throwaway path (never the real per-agent config) and start each test from
+    clean defaults — so the persistence/no-op behaviour is deterministic regardless of any
+    state file on the machine."""
+    monkeypatch.setattr(knobs_mod, "_state_path", lambda: tmp_path / "knobs.json")
+    knobs_mod.KNOBS.reset()
+    knobs_mod._STRATEGY["name"] = "balanced"
+    yield
+
+
 def test_knob_defaults_and_typed_set(knobs_mod):
     K = knobs_mod
-    K.apply_strategy("balanced")  # known baseline
     assert K.KNOBS.get("mining") is True and K.KNOBS.get("min_margin") == 30
     K.set_knob("min_margin", "15")            # number-as-string coerced
     assert K.KNOBS.get("min_margin") == 15
@@ -64,3 +74,26 @@ def test_engine_status_without_a_running_engine(knobs_mod):
     st = fleet.ops_status()                                # supervise-backed status, no engine yet
     assert st["running"] is False and st["watchdog"] is False
     assert st["started_minutes"] == fleet.KNOBS.get("window_minutes")
+
+
+def test_knobs_persist_across_a_restart(knobs_mod):
+    # The systemic "buy_buffer reverts to 600K": a tune must survive a restart, not reset.
+    K = knobs_mod
+    K.set_knob("buy_buffer", "23000")                      # tuned + saved to the isolated path
+    assert K.KNOBS.get("buy_buffer") == 23_000
+    K.KNOBS.reset()                                        # simulate a restart wiping in-memory state
+    assert K.KNOBS.get("buy_buffer") == 600_000
+    K._load()                                              # startup restore from the state file
+    assert K.KNOBS.get("buy_buffer") == 23_000            # the tune survived
+
+
+def test_reapplying_current_strategy_keeps_tunes(knobs_mod):
+    # A redundant st_strategy(current) must not wipe manual tunes back to the preset's values.
+    K = knobs_mod
+    K.set_knob("buy_buffer", "23000")
+    out = K.apply_strategy("balanced")                     # already on balanced → no-op
+    assert "already on" in out
+    assert K.KNOBS.get("buy_buffer") == 23_000            # NOT reset to 600K
+    # but switching to a DIFFERENT preset still resets to its doctrine
+    K.apply_strategy("mining")
+    assert K.KNOBS.get("buy_buffer") == 800_000
