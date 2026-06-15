@@ -74,7 +74,10 @@ def assign_roles(ships: list, *, mining_enabled: bool = True,
         elif r == "scout":
             probes.append(s)
         elif r == "mine":
-            miners.append(s)
+            # A "mine" pin can't make a laser-less hull mine (it has no extraction mount) —
+            # routing it to mining just burns the rate budget on failed extracts at wherever
+            # it sits. Keep an operator's intent to use it by putting it on trade instead.
+            (miners if can_mine(s) else traders).append(s)
         elif r == "contract":
             lead.append(s)
         elif r == "trade":

@@ -453,17 +453,33 @@ async def _sell_all_here(sym: str, *, log=None) -> int:
 
 
 async def _mining_loop(sym: str, deadline: float, asteroid: str, market: str, *, log=None) -> str:
-    """A cargo ship: fill the hold at an asteroid, sell at a market, repeat."""
+    """A mining ship: fill the hold at an asteroid, sell at a market, repeat.
+
+    Guarded so an impossible job can't spam the rate budget: a ship with no mining mount
+    (a pin can force a laser-less hull here), a failed travel to the rock, or an extract the
+    API rejects all bail out cleanly instead of re-extracting wherever the ship sits — that
+    was the J58 case (a pinned light-hauler 'extracting' at a marketplace, looping on 3001)."""
+    if not R.can_mine(await _ship(sym)):
+        if log:
+            log(f"{sym}: no mining mount — can't mine (pin a mining-capable ship instead)")
+        return f"{sym} has no mining laser — skipped mining"
     runs, earned = 0, 0
     while _now() < deadline:
-        await travel_to(sym, asteroid, log=log)
+        if not await travel_to(sym, asteroid, log=log):   # never extract unless we REACHED the rock
+            if log:
+                log(f"{sym}: couldn't reach asteroid {asteroid} — skipping mining this window")
+            return f"could not reach {asteroid} — no mining"
         await C.call("POST", f"/my/ships/{sym}/orbit")
         cap = (await _ship(sym))["cargo"]["capacity"]
         while (await _ship(sym))["cargo"]["units"] < cap and _now() < deadline:
             await _wait_cooldown(sym)
             out = await T.st_extract.ainvoke({"ship": sym})
             if "Error" in out:
-                break
+                # The API rejected the extract (not an asteroid / no mount / etc.) — terminal,
+                # not transient: stop instead of retrying it every cooldown and burning budget.
+                if log:
+                    log(f"{sym}: extract rejected ({out.strip()[:60]}) — stopping mining")
+                return f"{sym} can't extract at {asteroid}: {out.strip()[:80]}"
         await travel_to(sym, market, log=log)
         await C.call("POST", f"/my/ships/{sym}/dock")
         earned += await _sell_all_here(sym, log=log)
