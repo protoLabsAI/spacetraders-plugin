@@ -106,20 +106,27 @@ def test_mining_disabled_still_scouts_probes():
 
 # --- per-ship overrides (st_assign) ------------------------------------------------
 
-def test_override_pins_a_non_miner_to_mine():
-    # HAULER has no laser, but an explicit pin forces it to mine. With no trader left, the
-    # capital-base guard drafts the AUTO drone onto trade — the explicit pin is respected,
-    # the unpinned ship is what gets drafted.
+def test_mine_pin_on_a_laserless_ship_routes_to_trade():
+    # A "mine" pin can't make a laser-less HAULER mine (no extraction mount) — it would just
+    # burn the rate budget on failed extracts (the J58 bug). It's routed to trade instead;
+    # the DRONE (a real miner) mines.
     r = roles.assign_roles([HAULER, DRONE], overrides={"HAULER-1": "mine"})
-    assert "HAULER-1" in [s["symbol"] for s in r["miners"]]
-    assert [s["symbol"] for s in r["traders"]] == ["DRONE-1"]
+    assert "HAULER-1" in [s["symbol"] for s in r["traders"]]
+    assert "HAULER-1" not in [s["symbol"] for s in r["miners"]]
+    assert [s["symbol"] for s in r["miners"]] == ["DRONE-1"]
 
 
-def test_both_pinned_to_mine_leaves_no_trader():
-    # Pin BOTH to mine: no AUTO miner remains, so the guard does not fire — both mine.
+def test_mine_pin_on_a_mining_capable_ship_is_honoured():
+    # FRIGATE carries a mining laser, so its "mine" pin stands.
+    r = roles.assign_roles([FRIGATE, HAULER], overrides={"FRIGATE-1": "mine"})
+    assert [s["symbol"] for s in r["miners"]] == ["FRIGATE-1"]
+
+
+def test_both_pinned_to_mine_only_the_laser_ship_mines():
+    # Pin both: the DRONE (laser) mines; the HAULER (no laser) is routed to trade, not mining.
     r = roles.assign_roles([HAULER, DRONE], overrides={"HAULER-1": "mine", "DRONE-1": "mine"})
-    assert sorted(s["symbol"] for s in r["miners"]) == ["DRONE-1", "HAULER-1"]
-    assert r["traders"] == []
+    assert [s["symbol"] for s in r["miners"]] == ["DRONE-1"]
+    assert [s["symbol"] for s in r["traders"]] == ["HAULER-1"]
 
 
 def test_override_idle_parks_a_ship():
