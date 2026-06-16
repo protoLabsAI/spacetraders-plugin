@@ -4,8 +4,8 @@ A plugin-contributed console surface: a left-rail "Fleet" icon opens this live
 view of the agent's galaxy — credits, ships, contracts, and the background
 autopilot — so the operator can WATCH the autonomous fleet instead of polling over
 A2A. The console embeds `GET /plugins/spacetraders/dashboard` in an iframe; the page
-polls `GET /plugins/spacetraders/state` (server-side, uses the agent token) and
-renders. The snapshot is cached briefly so dashboard polling doesn't eat the
+polls the bearer-gated `GET /api/plugins/spacetraders/state` (server-side, uses the
+agent token) and renders. The snapshot is cached briefly so dashboard polling doesn't eat the
 per-account rate budget the fleet engine shares.
 """
 
