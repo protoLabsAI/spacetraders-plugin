@@ -95,6 +95,15 @@ def test_demotion_knobs_present(knobs_mod):
     assert K.KNOBS.get("route_strikes") == 2
 
 
+def test_cash_policy_reserve_floor_default_and_buy_buffer_legacy(knobs_mod):
+    # Unified cash policy: reserve_floor is the single hard floor with a sensible default;
+    # buy_buffer stays functional (legacy back-compat) so presets / persisted state don't break.
+    K = knobs_mod
+    assert K.KNOBS.get("reserve_floor") == 25_000
+    K.set_knob("buy_buffer", "120000")
+    assert K.KNOBS.get("buy_buffer") == 120_000
+
+
 def test_oscillating_tune_is_rejected(knobs_mod):
     # Bounded authority: a tune that reverts the knob's last change is refused (no flip-flopping).
     K = knobs_mod

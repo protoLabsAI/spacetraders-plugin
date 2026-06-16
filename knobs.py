@@ -31,14 +31,18 @@ KNOBS = (
     .define("min_margin", 30, lo=0, help="cr/unit floor below which a route isn't worth the fuel")
     .define("route_max_age", 900.0, lo=30.0,
             help="only DISPATCH on prices fresher than this (s); stale legs aren't live routes")
-    .define("buy_buffer", 600_000, lo=0, help="reinvest a light hauler once credits exceed this")
+    .define("buy_buffer", 600_000, lo=0,
+            help="(legacy) extra comfort threshold for the light-hauler reinvest — reserve_floor "
+                 "is now the canonical cash guard; kept for back-compat")
     .define("heavy_buffer", 1_500_000, lo=0,
             help="buy a long-range HEAVY_FREIGHTER above this (unlocks far contracts/routes)")
     .define("max_ships", 8, lo=1, help="cap on auto-bought fleet size")
     .define("probe_buffer", 150_000, lo=0, help="keep this reserve before scouting-buys")
     .define("map_target", 8, lo=1, help="markets in the price map before arbitrage surfaces")
     .define("max_probes", 5, lo=0, help="parallel scouts")
-    .define("reserve_floor", 0, lo=0, help="hard cash floor — no ship reinvest below this")
+    .define("reserve_floor", 25_000, lo=0,
+            help="the single hard cash floor — a reinvest never dips below it (goods buys are "
+                 "separately capped by max_spend_frac); the one knob to keep a cushion")
     .define("max_spend_frac", 0.5, lo=0.1, hi=1.0,
             help="cap one trade's buy at this fraction of credits (working-capital guard; 1=off)")
     .define("window_minutes", 15.0, lo=1.0, help="autopilot window length / OODA cadence (min)")

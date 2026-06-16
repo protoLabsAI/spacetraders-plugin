@@ -268,11 +268,12 @@ async def st_autopilot_stop() -> str:
 async def st_knobs() -> str:
     """Read the engine's current strategy knobs — for auditing how the engine is behaving.
 
-    Knobs: min_margin, buy_buffer, max_ships, probe_buffer, map_target, max_probes,
-    reserve_floor (ship-reinvest floor), max_spend_frac (working-capital guard — cap one
-    trade's buy at this fraction of credits), window_minutes (autopilot window / OODA cadence),
-    sink_volume_mult + sink_supply_cutoff (saturation damping), route_diversify (spread
-    haulers across the top-N routes)."""
+    Cash policy (one coherent story): reserve_floor (the single hard cash floor — reinvest
+    never dips below it) + max_spend_frac (caps one trade's goods buy to a fraction of credits).
+    buy_buffer is legacy (an optional extra comfort threshold for the hauler reinvest).
+    Other knobs: min_margin, route_max_age, max_ships, probe_buffer/heavy_buffer, map_target,
+    max_probes, window_minutes, sink_volume_mult + sink_supply_cutoff (saturation damping),
+    route_diversify, stable_plan + route_strikes (the persistent plan), strategist_cadence_min."""
     from . import fleet
     return ", ".join(f"{k}={v}" for k, v in fleet.knobs().items())
 
