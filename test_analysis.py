@@ -83,3 +83,40 @@ def test_exchange_is_fallback_only():
 def test_empty_markets_return_empty():
     assert analysis.best_route([]) == {}
     assert analysis.rank_routes([]) == []
+
+
+# ── working-capital sizing (affordable_units) ──────────────────────────────────────────────
+
+
+def test_affordable_units_caps_high_value_buy_to_cash_fraction():
+    # The ASSAULT_RIFLES crash: a full 40-hold of an ~2800/unit good against 109k credits is
+    # ~78k — nearly the whole treasury. At max_spend_frac=0.5 the buy is capped to what 54,500
+    # buys (19 units), not the cargo room.
+    assert analysis.affordable_units(109_000, 2800, room=40, vol_cap=40, max_spend_frac=0.5) == 19
+
+
+def test_affordable_units_room_and_volcap_still_bind():
+    # Cheap good, plenty of cash → the cargo room / saturation cap are the binding limits.
+    assert analysis.affordable_units(200_000, 100, room=40, vol_cap=28, max_spend_frac=0.5) == 28
+    assert analysis.affordable_units(200_000, 100, room=10, vol_cap=28, max_spend_frac=0.5) == 10
+
+
+def test_affordable_units_small_buy_at_low_credits_no_deadlock():
+    # Underwater (36k) on a cheap good: still buys SOMETHING (no hard floor → no deadlock).
+    # 0.5 × 36k = 18k → 18000 // 556 = 32, capped by room/vol.
+    assert analysis.affordable_units(36_000, 556, room=40, vol_cap=40, max_spend_frac=0.5) == 32
+
+
+def test_affordable_units_zero_when_cant_afford_one_unit():
+    # One unit costs more than the per-trade budget → buy nothing (caller skips, holds cash).
+    assert analysis.affordable_units(50_000, 30_000, room=40, vol_cap=40, max_spend_frac=0.5) == 0
+
+
+def test_affordable_units_frac_one_disables_cash_cap():
+    # max_spend_frac >= 1 → cash cap off; only room/vol_cap bind (legacy behaviour).
+    assert analysis.affordable_units(10_000, 2800, room=40, vol_cap=40, max_spend_frac=1.0) == 40
+
+
+def test_affordable_units_unknown_price_falls_back_to_size_caps():
+    assert analysis.affordable_units(100_000, None, room=40, vol_cap=28, max_spend_frac=0.5) == 28
+    assert analysis.affordable_units(100_000, 0, room=5, vol_cap=28, max_spend_frac=0.5) == 5
