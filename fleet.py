@@ -328,28 +328,40 @@ async def _good_quote(wp: str, good: str) -> tuple:
         return (None, None, None)
 
 
-async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *, log=None) -> str:
-    """One buy-low / sell-high round trip for a good — only if the spread is positive, and
-    sized so it doesn't crash the sink: buy at most ``sink_volume_mult × (sink tradeVolume)``,
-    so one delivery moves the import price ~one tier-step instead of cratering it (the #1
-    way an unattended bot kills its own routes). Raise sink_volume_mult for a thin fleet."""
+async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *,
+                    expected_sell: float | None = None, sink_vol: int | None = None,
+                    log=None) -> str:
+    """One buy-low / sell-high round trip for a good.
+
+    Requires a CONFIRMED sink: ``expected_sell`` is the importer's sell price from the FRESH
+    price map (carried on the ranked route). Without it we never commit a buy — that's the
+    no-blind-dispatch rule that kills the dead-end loop (a recalled / since-moved sink whose
+    price can't be confirmed). It also bounds the buy: we never pay above the resale we have
+    evidence for. Sized so it doesn't crash the sink — buy at most
+    ``sink_volume_mult × sink_vol`` (the importer's tradeVolume), so one delivery moves the
+    import price ~one tier-step instead of cratering it.
+    """
     cap = (await _ship(sym))["cargo"]["capacity"]
+    # Confirmed-sink guard: only trade a route whose sink we have a fresh sell price for. No
+    # price → don't buy blind (the route is recalled/stale or the sink moved).
+    if not expected_sell:
+        return f"skipped {good} trade: no confirmed sell price at sink {sell_wp} — won't buy blind"
     if not await travel_to(sym, buy_wp, log=log):   # too far to auto-DRIFT → skip, don't buy elsewhere
         return f"skipped {good} trade: couldn't reach buy waypoint {buy_wp} (too far)"
-    # Profitability guard: confirm sell (at sell_wp) > buy (here) before committing.
+    # Profitability guard: the ship is AT buy_wp now, so its buy price is live/real — bail if the
+    # spread vs the confirmed sink price has closed since the route was ranked.
     buy_price, _ = await _good_price(buy_wp, good)
-    _, sell_price, sell_vol = await _good_quote(sell_wp, good)
-    if buy_price and sell_price and sell_price <= buy_price:
-        return (f"skipped {good} trade: buy {buy_price} ≥ sell {sell_price} "
+    if buy_price and expected_sell <= buy_price:
+        return (f"skipped {good} trade: buy {buy_price} ≥ confirmed sell {expected_sell:.0f} "
                 f"({buy_wp}→{sell_wp}) — no margin, would lose money")
     target = cap
-    if sell_vol:                                  # saturation cap — keep a delivery ≈ one tier-step
-        target = min(cap, max(1, round(KNOBS.get("sink_volume_mult") * sell_vol)))
+    if sink_vol:                                  # saturation cap — keep a delivery ≈ one tier-step
+        target = min(cap, max(1, round(KNOBS.get("sink_volume_mult") * sink_vol)))
     await _dump_except(sym, good, log=log)
-    await _buy(sym, good, target, max_price=sell_price, log=log)
+    await _buy(sym, good, target, max_price=expected_sell, log=log)
     held = await _held(sym, good)
     if held == 0:
-        return f"could not buy {good} at {buy_wp} (or price ≥ resale — guarded)"
+        return f"could not buy {good} at {buy_wp} (price ≥ resale or below cash cap — guarded)"
     if not await travel_to(sym, sell_wp, log=log):   # bought but the sink is too far to auto-DRIFT
         return f"bought {held}×{good} but couldn't reach sell waypoint {sell_wp} (too far) — holding"
     await C.call("POST", f"/my/ships/{sym}/dock")
@@ -585,20 +597,22 @@ async def _ranked_routes(system: str, market_wps: list) -> list:
             continue
         if m.get("tradeGoods"):
             prices.record_market(system, wp, m["tradeGoods"])
-    ranked = rank_routes(prices.price_map(system), min_margin=KNOBS.get("min_margin"),
+    # Rank ONLY over FRESH prices (route_max_age) — a stale leg is not a live route. Prices
+    # drift fast (the strategist watched a +3,086/unit margin collapse to +81 within windows),
+    # so dispatch a hauler only on a freshly-confirmed export→import pair.
+    ranked = rank_routes(prices.price_map(system, max_age=KNOBS.get("route_max_age")),
+                         min_margin=KNOBS.get("min_margin"),
                          sink_supply_cutoff=KNOBS.get("sink_supply_cutoff"))
     if ranked:
         top = ranked[0]
         routes.remember_route(system, top["good"], top["buy_at"], top["sell_at"],
                               top["profit_per_unit"])
-    else:
-        # Live scan is dry (thin/aged price map) — instead of idling, fall back to routes we
-        # LEARNED before (across windows/wipes). job_trade re-checks live prices at the buy/sell
-        # legs before committing, so a stale recall is skipped, not a loss — and visiting the buy
-        # waypoint re-lights that market for the price map. This is the engine USING what it learns.
-        ranked = [{"good": r["good"], "buy_at": r["buy_at"], "sell_at": r["sell_at"],
-                   "profit_per_unit": r["margin"], "volume": 0, "kind": "recalled",
-                   "score": r["margin"]} for r in routes.recall_routes(system)]
+    # Recalled routes (routes.recall_routes) are NO LONGER dispatched to haulers: a remembered
+    # route can be from a prior wipe or a since-moved market, so buying on it blind is exactly the
+    # dead-end loss (the "D40 attractor"). Recall now only SEEDS exploration — probes re-light
+    # remembered markets, and a hauler trades a route only once it's re-confirmed fresh above.
+    # When the fresh scan is dry the hauler idles (waits for probes), which never loses money.
+    # (PR 3 will add probe stationing to hold the active route's endpoints live continuously.)
     _ROUTE_CACHE.update(at=now, routes=ranked)
     return ranked
 
@@ -624,7 +638,9 @@ async def _trade_loop(sym: str, deadline: float, system: str, market_wps: list,
         if not route:
             await asyncio.sleep(15)           # wait for probes to scout a profitable spread
             continue
-        res = await job_trade(sym, route["good"], route["buy_at"], route["sell_at"], log=log)
+        res = await job_trade(sym, route["good"], route["buy_at"], route["sell_at"],
+                              expected_sell=route.get("sell_price"),
+                              sink_vol=route.get("sink_volume"), log=log)
         if log:
             log(f"{sym}: {res}")
         runs += 1

@@ -85,6 +85,32 @@ def test_empty_markets_return_empty():
     assert analysis.rank_routes([]) == []
 
 
+def test_route_carries_sink_price_and_volume_for_confirmed_dispatch():
+    # PR2: a route carries absolute buy/sell prices + the SINK's tradeVolume, so the engine can
+    # confirm a sink (won't buy blind) and size a delivery against the IMPORTER's volume.
+    markets = [
+        _mkt("EXP", [_good("FUEL", "EXPORT", purchase=100, sell=90, vol=60, supply="ABUNDANT")]),
+        _mkt("IMP", [_good("FUEL", "IMPORT", purchase=210, sell=200, vol=12, supply="SCARCE")]),
+    ]
+    r = analysis.best_route(markets, min_margin=1)
+    assert r["buy_at"] == "EXP" and r["sell_at"] == "IMP"
+    assert r["buy_price"] == 100 and r["sell_price"] == 200
+    assert r["profit_per_unit"] == 100
+    assert r["sink_volume"] == 12          # the IMPORTER's tradeVolume, not the exporter's 60
+    assert r["volume"] == 60               # buy-leg volume still carried (for scoring)
+
+
+def test_exchange_route_also_carries_prices():
+    markets = [
+        _mkt("A", [_good("ANTIMATTER", "EXCHANGE", purchase=100, sell=90, vol=10)]),
+        _mkt("B", [_good("ANTIMATTER", "EXCHANGE", purchase=160, sell=150, vol=10)]),
+    ]
+    r = analysis.best_route(markets, min_margin=1)
+    assert r["kind"] == "exchange"
+    assert r["buy_price"] == 100 and r["sell_price"] == 150
+    assert r["sink_volume"] == 10
+
+
 # ── working-capital sizing (affordable_units) ──────────────────────────────────────────────
 
 

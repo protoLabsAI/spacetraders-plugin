@@ -29,6 +29,8 @@ DLOG = DecisionLog(cap=40)
 KNOBS = (
     Knobs()
     .define("min_margin", 30, lo=0, help="cr/unit floor below which a route isn't worth the fuel")
+    .define("route_max_age", 900.0, lo=30.0,
+            help="only DISPATCH on prices fresher than this (s); stale legs aren't live routes")
     .define("buy_buffer", 600_000, lo=0, help="reinvest a light hauler once credits exceed this")
     .define("heavy_buffer", 1_500_000, lo=0,
             help="buy a long-range HEAVY_FREIGHTER above this (unlocks far contracts/routes)")
