@@ -1,0 +1,27 @@
+name: CI
+
+# Host-free gate: ruff lint + the pure-domain test suites (roles / analysis / plan /
+# reset-recovery / check-credits). The engine modules (knobs / fleet / tools) import the
+# protoAgent host (graph.sdk), which standalone CI doesn't have — `test_retrofit_smoke.py`
+# `importorskip`s those, so it SKIPS here and runs in a host environment. This makes every
+# PR's "tests green / lint clean" claim verifiable (closing the recurring review CI gap).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tooling
+        run: pip install pytest ruff httpx
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Host-free tests (pytest)
+        run: pytest -q
