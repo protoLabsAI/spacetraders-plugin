@@ -155,7 +155,9 @@ async def _buy(sym: str, good: str, target: int, *, max_price: float | None = No
         if log:
             log(f"{sym}: SKIP buy {good} @ {price} > ceiling {max_price:.0f} (would lose money)")
         return
-    frac = KNOBS.get("max_spend_frac") or 1.0
+    frac = KNOBS.get("max_spend_frac")
+    if frac is None:                       # explicit: a missing knob disables the cap, NOT a 0.0 value
+        frac = 1.0
     while await _held(sym, good) < target:
         s = await _ship(sym)
         room = s["cargo"]["capacity"] - s["cargo"]["units"]
