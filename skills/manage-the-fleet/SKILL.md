@@ -21,9 +21,9 @@ slow one* — slower now than before, on purpose.
   - **capital-disciplined** — a single buy can never drain the treasury (`max_spend_frac`);
   - **never buys blind** — it only trades a route with a confirmed, *fresh* sell price, so it
     can't get stuck hauling into a dead-end / since-moved market;
-  - **position-sticky** — with `stable_plan` on, a persistent plan holds each hauler on its
-    route across windows and stations probes at the active route's endpoints (so both ends stay
-    live-priced). Positions no longer evaporate every window.
+  - **position-sticky** — a persistent plan holds each hauler on its route across windows and
+    stations probes at the active route's endpoints (so both ends stay live-priced). Positions
+    no longer evaporate every window — this is the engine's dispatch model, always on.
 - **Outer loop (the brain — YOU):** you steer **policy**. The engine holds its own positions
   now, so your job is *not* to re-place ships every window — it's to pick the doctrine and the
   guard settings, occasionally, when the data says the regime changed. Steer slowly.
@@ -33,14 +33,14 @@ matters, and carries lessons across windows **and universe resets** (durable kno
 
 ## Turn it on (once, up front)
 
-1. **Start the engine** — delegate to the **fleet-commander**, or `st_autopilot_start(20)`.
-2. **Enable the stable plan** — `st_tune("stable_plan","1")`. This is what holds positions across
-   windows (the fix for the old "every fix erased next window" churn). Watch a couple of windows
-   on the **Fleet** dashboard: a hauler should *stay* on its route and credits should compound.
-3. **Set the goal** — a `spacetraders:credits` target (e.g. 1,000,000), **monitor** disposition,
+1. **Start the engine** — delegate to the **fleet-commander**, or `st_autopilot_start(20)`. The
+   persistent plan is the engine's dispatch model (always on): it holds positions across windows
+   (the fix for the old "every fix erased next window" churn). Watch a couple of windows on the
+   **Fleet** dashboard — a hauler should *stay* on its route and credits should compound.
+2. **Set the goal** — a `spacetraders:credits` target (e.g. 1,000,000), **monitor** disposition,
    so falling off-track nudges a re-strategize. Its verifier ground-truths live credits; its
    `on_achieved` hook winds the engine down.
-4. **Schedule the tick — DAILY, not every window.** `schedule_task` the OODA prompt on a cadence
+3. **Schedule the tick — DAILY, not every window.** `schedule_task` the OODA prompt on a cadence
    near `strategist_cadence_min` (default **1440 min / daily**). The engine runs unattended in
    between; you only need to look in when a window's worth of data has accumulated or a goal
    nudge fires. Tighten the cadence only for a genuinely volatile map.
@@ -69,8 +69,8 @@ one** policy change, learn, stop.
    |---|---|
    | engine earning nothing / no profitable route mapped | `st_tune("min_margin","15")` to surface thinner routes, or `st_strategy("trade-max")`; confirm probes are scouting/stationed |
    | whole map saturating, cr/hr trending down | tighten the sink guard: `st_tune("sink_supply_cutoff","HIGH")` and/or `st_tune("sink_volume_mult","0.5")` |
-   | haulers thrash between routes (stable_plan off) | `st_tune("stable_plan","1")` — let the plan hold positions |
    | routes go stale before haulers arrive (volatile map) | lower `st_tune("route_max_age","600")` so dispatch uses only fresh prices |
+   | a hauler keeps abandoning a good route too fast | raise `st_tune("route_strikes","3")` so the plan holds it longer |
    | crashes from over-buying a pricey good | lower `st_tune("max_spend_frac","0.3")` — commit less cash per trade |
    | off-track for the deadline, thin map | research with `st_docs` / `web_search`, then pick a doctrine with `st_strategy` |
    | a genuinely mis-cast hull (rare) | `st_assign(...)` — but this is a **manual exception**, not a per-tick reflex (see Guardrails) |

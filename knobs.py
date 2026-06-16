@@ -52,10 +52,7 @@ KNOBS = (
     .define("sink_supply_cutoff", "ABUNDANT",
             choices=["SCARCE", "LIMITED", "MODERATE", "HIGH", "ABUNDANT"],
             help="skip importers already saturated at/above this supply tier")
-    .define("route_diversify", 1, lo=0, hi=1, help="1=spread haulers across the top-N routes")
     .define("mining", True, help="mining-capable hulls mine (off = every hold trades)")
-    .define("stable_plan", False,
-            help="persistent reconcile-not-replan plan: haulers keep routes, probes hold endpoints (A/B)")
     .define("route_strikes", 2, lo=1,
             help="windows a hauler holds a route after it drops out of the fresh ranking")
     .define("strategist_cadence_min", 1440, lo=15,

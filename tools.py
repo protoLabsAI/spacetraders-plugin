@@ -273,7 +273,7 @@ async def st_knobs() -> str:
     buy_buffer is legacy (an optional extra comfort threshold for the hauler reinvest).
     Other knobs: min_margin, route_max_age, max_ships, probe_buffer/heavy_buffer, map_target,
     max_probes, window_minutes, sink_volume_mult + sink_supply_cutoff (saturation damping),
-    route_diversify, stable_plan + route_strikes (the persistent plan), strategist_cadence_min."""
+    route_strikes (how long a hauler holds a route in the persistent plan), strategist_cadence_min."""
     from . import fleet
     return ", ".join(f"{k}={v}" for k, v in fleet.knobs().items())
 
@@ -289,9 +289,9 @@ async def st_tune(knob: str, value: str) -> str:
       st_tune("sink_supply_cutoff", "HIGH") — stop selling into importers already at HIGH supply
 
     Args:
-        knob: min_margin | buy_buffer | max_ships | probe_buffer | map_target | max_probes |
-            reserve_floor | max_spend_frac | window_minutes | sink_volume_mult |
-            sink_supply_cutoff | route_diversify
+        knob: min_margin | max_ships | probe_buffer | map_target | max_probes | reserve_floor |
+            max_spend_frac | window_minutes | sink_volume_mult | sink_supply_cutoff |
+            route_max_age | route_strikes | strategist_cadence_min
         value: the new value (a number, or a supply tier like "HIGH" for sink_supply_cutoff)
     """
     from . import fleet

@@ -88,11 +88,14 @@ def test_knobs_persist_across_a_restart(knobs_mod):
 
 
 def test_demotion_knobs_present(knobs_mod):
-    # Stage-4 (strategist demotion) + stage-3 knobs are registered with safe defaults.
+    # Strategist-demotion + persistent-plan knobs are registered with safe defaults. The
+    # greenfield removed stable_plan (the plan is always-on now) and route_diversify (the
+    # reconcile diversifies haulers across distinct routes itself).
     K = knobs_mod
     assert K.KNOBS.get("strategist_cadence_min") == 1440   # daily — the strategist steers slowly
-    assert K.KNOBS.get("stable_plan") is False             # A/B, default off
     assert K.KNOBS.get("route_strikes") == 2
+    assert "stable_plan" not in K.KNOBS.values()           # removed — plan is the engine
+    assert "route_diversify" not in K.KNOBS.values()       # removed — superseded by reconcile
 
 
 def test_cash_policy_reserve_floor_default_and_buy_buffer_legacy(knobs_mod):

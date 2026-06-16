@@ -623,9 +623,9 @@ async def _ranked_routes(system: str, market_wps: list) -> list:
 
 
 async def _best_trade_route(system: str, market_wps: list, rank: int = 0) -> dict | None:
-    """The ``rank``-th best profitable route (0 = best). With route_diversify on, each
-    hauler is handed a different rank so they spread across the top-N rather than all
-    pile onto the single best route and saturate it."""
+    """The ``rank``-th best profitable route (0 = best). The plan's reconcile hands each hauler
+    a distinct top-N route so they spread out instead of piling on the single best route and
+    saturating it; this rank arg serves the fallback re-ranking loop."""
     ranked = await _ranked_routes(system, market_wps)
     if not ranked:
         return None
@@ -806,7 +806,7 @@ async def _siphon_targets(system: str) -> list:
     return [(g, m) for g, m, _ in pairs[:4]]
 
 
-# ── stable-plan jobs (stable_plan knob) — hold positions across the window/windows ──────────
+# ── persistent-plan jobs — hold positions across the window and across windows ──────────────
 _STATION_POLL = 60.0   # seconds between a stationed probe's market re-reads
 
 
@@ -898,12 +898,12 @@ async def autopilot(minutes: float, *, log=None) -> dict:
     role = R.assign_roles(ships, mining_enabled=KNOBS.get("mining"), overrides=overrides())
     probes, miners, siphoners, traders = (
         role["probes"], role["miners"], role["siphoners"], role["traders"])
-    # Stable-plan mode (stable_plan knob, default OFF): reconcile a PERSISTENT assignment so
-    # positions stick — haulers keep their route across windows, probes hold the active route's
-    # endpoints live. When off, _pa stays empty and every dispatch below is byte-for-byte the
-    # from-scratch behaviour (the A/B switch).
+    # The PERSISTENT PLAN is the engine: reconcile a stable assignment so positions STICK —
+    # haulers keep their route across windows, probes hold the active route's endpoints live.
+    # (This replaced the old stateless re-plan-every-window dispatch, which let positions
+    # evaporate each window — the cause of the multi-hour flatline.)
     _pa: dict = {}
-    if KNOBS.get("stable_plan") and system and market_wps:
+    if system and market_wps:
         from . import plan as _plan
         ranked = await _ranked_routes(system, market_wps)
         pl = _plan.reconcile(_plan.load(), role, ranked, route_strikes=KNOBS.get("route_strikes"))
@@ -945,20 +945,17 @@ async def autopilot(minutes: float, *, log=None) -> dict:
     if traders:
         jobs[traders[0]["symbol"]] = _contract_then_trade(
             traders[0]["symbol"], deadline, claimed, lock, system, market_wps, log=log)
-        for i, s in enumerate(traders[1:], start=1):
+        # Every other hauler runs its PLAN route — reconcile already spread them across distinct
+        # top-N routes (no saturation pile-up). A hauler the plan left without a fresh route
+        # (fewer fresh routes than haulers) grabs the best available via the re-ranking loop.
+        for s in traders[1:]:
             if not (system and market_wps):
                 continue
             route = _pa.get(s["symbol"], {}).get("route")
-            if _pa and route:                 # stable plan: trade the PERSISTENT route (no re-rank)
+            if route:
                 jobs[s["symbol"]] = _trade_route_loop(s["symbol"], deadline, route, log=log)
-            elif _pa:   # stable plan, but no route assigned to this hauler (fewer fresh routes than
-                        # haulers) → fall back to the re-ranking trade loop: it trades the best
-                        # available route if one appears, and only idles when none is profitable.
+            else:
                 jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps, log=log)
-            else:                             # stable plan OFF: existing diversified per-round re-rank
-                rank = i if KNOBS.get("route_diversify") else 0
-                jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps,
-                                                rank=rank, log=log)
 
     results = await run_fleet(jobs, log=log)
     end_credits = await _credits()

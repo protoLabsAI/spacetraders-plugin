@@ -13,8 +13,9 @@ window erased its fixes). This holds a PERSISTENT assignment reconciled INCREMEN
 
 The reconcile core is PURE (no I/O, no relative imports) so it unit-tests host-free
 exactly like ``roles`` / ``analysis``. Persistence is a thin JSON file next to the
-scoped knobs (same home as ``spacetraders_knobs.json``). Gated by the ``stable_plan``
-knob — default off, so it A/Bs against the current dispatcher on a live fleet.
+scoped knobs (same home as ``spacetraders_knobs.json``). This IS the engine's dispatch
+model — every window reconciles + dispatches through it (it replaced the old stateless
+re-plan-every-window path).
 """
 
 from __future__ import annotations
