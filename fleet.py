@@ -27,6 +27,11 @@ from .knobs import (  # noqa: F401
     overrides, set_knob, set_override,
 )
 
+# The engine signals "trade round trip completed" by a result string starting with this — the
+# one place the success marker lives, so a caller (e.g. _trade_route_loop) checks against it
+# rather than re-hardcoding the literal (keeps job_trade's message and its readers in sync).
+_TRADE_OK = "traded"
+
 
 async def _ship(sym: str) -> dict:
     return await C.call("GET", f"/my/ships/{sym}")
@@ -366,7 +371,7 @@ async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *,
         return f"bought {held}×{good} but couldn't reach sell waypoint {sell_wp} (too far) — holding"
     await C.call("POST", f"/my/ships/{sym}/dock")
     sold = await _sell(sym, good, held, log=log)
-    return f"traded {sold}×{good} (of {held} hauled)"
+    return f"{_TRADE_OK} {sold}×{good} (of {held} hauled)"
 
 
 async def job_scout(sym: str, market_waypoints: list, deadline: float, *, log=None) -> dict:
@@ -798,6 +803,60 @@ async def _siphon_targets(system: str) -> list:
     return [(g, m) for g, m, _ in pairs[:4]]
 
 
+# ── stable-plan jobs (stable_plan knob) — hold positions across the window/windows ──────────
+_STATION_POLL = 60.0   # seconds between a stationed probe's market re-reads
+
+
+async def _station_loop(sym: str, deadline: float, waypoint: str, *, log=None) -> str:
+    """Hold a probe ON STATION at a route endpoint, re-polling its market so the price stays
+    LIVE for the route ranker — the fix for the stale/blind-sink problem (a route's two ends
+    are rarely both lit by roving probes). Free for a probe (no fuel). It does NOT roam, so the
+    endpoint never goes dark mid-window."""
+    if not await travel_to(sym, waypoint, log=log):
+        return f"could not reach station {waypoint}"
+    from . import prices
+    polls, errors = 0, 0
+    while _now() < deadline:
+        try:
+            await C.call("POST", f"/my/ships/{sym}/dock")
+            system = T._system_of(waypoint)
+            m = await C.call("GET", f"/systems/{system}/waypoints/{waypoint}/market")
+            if m.get("tradeGoods"):
+                prices.record_market(system, waypoint, m["tradeGoods"])
+                polls += 1
+            errors = 0
+        except C.SpaceTradersError as e:
+            errors += 1
+            if log:
+                log(f"{sym}: station read failed at {waypoint} ({e}) [{errors}/3]")
+            if errors >= 3:   # waypoint invalid / persistent failure — don't hold a dead post all window
+                return f"abandoned station {waypoint} after {errors} consecutive errors ({polls} refreshes)"
+        await asyncio.sleep(_STATION_POLL)
+    return f"stationed at {waypoint} ({polls} price refreshes)"
+
+
+async def _trade_route_loop(sym: str, deadline: float, route: dict, *, log=None) -> str:
+    """Trade a FIXED route (from the persistent plan) round trip after round trip until the
+    window ends — no per-round re-ranking, so the hauler STAYS on its route (and, via the plan,
+    across windows) instead of hopping. job_trade still re-checks the live spread each trip and
+    bails if it closed; that miss is what strikes the route at the next reconcile."""
+    runs = 0
+    while _now() < deadline:
+        res = await job_trade(sym, route["good"], route["buy_at"], route["sell_at"],
+                              expected_sell=route.get("sell_price"),
+                              sink_vol=route.get("sink_volume"), log=log)
+        if log:
+            log(f"{sym}: {res}")
+        # Key the bail on the SUCCESS marker (job_trade returns _TRADE_OK only on a completed
+        # round trip) rather than matching a failure string — any non-trade outcome (skipped /
+        # couldn't reach / holding cash) stops the loop, and the miss strikes the route at the
+        # next reconcile.
+        if not res.startswith(_TRADE_OK):
+            return f"completed {runs} fixed-route trade run(s); stopped: {res}"
+        runs += 1
+    return f"completed {runs} fixed-route trade run(s)"
+
+
 async def autopilot(minutes: float, *, log=None) -> dict:
     """Run the fleet toward max credits for ``minutes`` — the zero-to-million engine.
     Contracts are per-AGENT (one active), so ONE trader works contracts (the capital
@@ -836,11 +895,28 @@ async def autopilot(minutes: float, *, log=None) -> dict:
     role = R.assign_roles(ships, mining_enabled=KNOBS.get("mining"), overrides=overrides())
     probes, miners, siphoners, traders = (
         role["probes"], role["miners"], role["siphoners"], role["traders"])
-    # Spread probes ACROSS the markets (round-robin) so they cover ground instead of
-    # all clustering on the first few — that's what fills the price map fast.
-    for i, p in enumerate(probes):
-        if market_wps:
-            share = market_wps[i::len(probes)] or market_wps
+    # Stable-plan mode (stable_plan knob, default OFF): reconcile a PERSISTENT assignment so
+    # positions stick — haulers keep their route across windows, probes hold the active route's
+    # endpoints live. When off, _pa stays empty and every dispatch below is byte-for-byte the
+    # from-scratch behaviour (the A/B switch).
+    _pa: dict = {}
+    if KNOBS.get("stable_plan") and system and market_wps:
+        from . import plan as _plan
+        ranked = await _ranked_routes(system, market_wps)
+        pl = _plan.reconcile(_plan.load(), role, ranked, route_strikes=KNOBS.get("route_strikes"))
+        _plan.save(pl)
+        _pa = pl["ships"]
+    # Probes: STATION the active route's endpoints (stable plan), the rest round-robin SCOUT the
+    # non-stationed markets so they cover ground / fill the price map fast.
+    station_wps = {a["station"] for a in _pa.values() if a.get("role") == "station" and a.get("station")}
+    scout_targets = [w for w in market_wps if w not in station_wps] or market_wps
+    scout_probes = [p for p in probes if _pa.get(p["symbol"], {}).get("role") != "station"]
+    for p in probes:
+        if _pa.get(p["symbol"], {}).get("role") == "station":
+            jobs[p["symbol"]] = _station_loop(p["symbol"], deadline, _pa[p["symbol"]]["station"], log=log)
+    for i, p in enumerate(scout_probes):
+        if scout_targets:
+            share = scout_targets[i::len(scout_probes)] or scout_targets
             jobs[p["symbol"]] = job_scout(p["symbol"], share, deadline, log=log)
     # Miners dig at a CENTRAL asteroid and sell the ore — spread round-robin across the ranked
     # (asteroid, market) pairs so several miners don't pile on one rock + one buyer (saturation)
@@ -866,10 +942,17 @@ async def autopilot(minutes: float, *, log=None) -> dict:
     if traders:
         jobs[traders[0]["symbol"]] = _contract_then_trade(
             traders[0]["symbol"], deadline, claimed, lock, system, market_wps, log=log)
-        # Diversify haulers across the top-N routes (rank by position) when route_diversify
-        # is on, so they don't all stack on the single best route and saturate it.
         for i, s in enumerate(traders[1:], start=1):
-            if system and market_wps:
+            if not (system and market_wps):
+                continue
+            route = _pa.get(s["symbol"], {}).get("route")
+            if _pa and route:                 # stable plan: trade the PERSISTENT route (no re-rank)
+                jobs[s["symbol"]] = _trade_route_loop(s["symbol"], deadline, route, log=log)
+            elif _pa:   # stable plan, but no route assigned to this hauler (fewer fresh routes than
+                        # haulers) → fall back to the re-ranking trade loop: it trades the best
+                        # available route if one appears, and only idles when none is profitable.
+                jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps, log=log)
+            else:                             # stable plan OFF: existing diversified per-round re-rank
                 rank = i if KNOBS.get("route_diversify") else 0
                 jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps,
                                                 rank=rank, log=log)
@@ -929,6 +1012,12 @@ async def _recover(result) -> bool:
     reset (no account token / call sign claimed) → return False so the supervisor stops the storm."""
     err = (result or {}).get("error") or ""
     if "4113" in err or "reset_date" in err:
+        from . import plan as _plan
+        # 4113 means the universe HAS already wiped — the plan's waypoints/ship-ids are invalid
+        # NOW, so clear it regardless of whether the re-registration below succeeds (a failed
+        # recovery would only re-kick into the same wall; a later window rebuilds the plan fresh).
+        # The learned-route memory (routes.py) survives the wipe; the per-reset plan does not.
+        _plan.clear()
         try:
             status = await C.recover_from_reset()
         except Exception as e:  # noqa: BLE001
