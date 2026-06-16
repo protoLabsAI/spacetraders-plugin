@@ -724,7 +724,10 @@ async def _maybe_reinvest(ships: list, system: str, *, log=None) -> None:
     floor = KNOBS.get("reserve_floor")
 
     def _affordable(ship_type: str, buffer_knob: str) -> bool:
-        # comfortable enough (buffer) AND the buy won't dip below the hard cash floor
+        # reserve_floor is the CANONICAL guard: the buy must not dip below it. The per-tier
+        # *_buffer is now just an OPTIONAL extra comfort threshold on top — raising reserve_floor
+        # alone already tightens every reinvest, so the cash story is one knob (the buffers are
+        # legacy comfort dials). Both conditions must hold.
         return credits >= KNOBS.get(buffer_knob) and credits - _SHIP_COST.get(ship_type, 0) >= floor
 
     from . import prices
