@@ -27,6 +27,11 @@ from .knobs import (  # noqa: F401
     overrides, set_knob, set_override,
 )
 
+# The engine signals "trade round trip completed" by a result string starting with this — the
+# one place the success marker lives, so a caller (e.g. _trade_route_loop) checks against it
+# rather than re-hardcoding the literal (keeps job_trade's message and its readers in sync).
+_TRADE_OK = "traded"
+
 
 async def _ship(sym: str) -> dict:
     return await C.call("GET", f"/my/ships/{sym}")
@@ -366,7 +371,7 @@ async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *,
         return f"bought {held}×{good} but couldn't reach sell waypoint {sell_wp} (too far) — holding"
     await C.call("POST", f"/my/ships/{sym}/dock")
     sold = await _sell(sym, good, held, log=log)
-    return f"traded {sold}×{good} (of {held} hauled)"
+    return f"{_TRADE_OK} {sold}×{good} (of {held} hauled)"
 
 
 async def job_scout(sym: str, market_waypoints: list, deadline: float, *, log=None) -> dict:
@@ -842,11 +847,11 @@ async def _trade_route_loop(sym: str, deadline: float, route: dict, *, log=None)
                               sink_vol=route.get("sink_volume"), log=log)
         if log:
             log(f"{sym}: {res}")
-        # Key the bail on the SUCCESS marker (job_trade returns "traded …" only on a completed
+        # Key the bail on the SUCCESS marker (job_trade returns _TRADE_OK only on a completed
         # round trip) rather than matching a failure string — any non-trade outcome (skipped /
         # couldn't reach / holding cash) stops the loop, and the miss strikes the route at the
         # next reconcile.
-        if not res.startswith("traded"):
+        if not res.startswith(_TRADE_OK):
             return f"completed {runs} fixed-route trade run(s); stopped: {res}"
         runs += 1
     return f"completed {runs} fixed-route trade run(s)"
@@ -943,7 +948,9 @@ async def autopilot(minutes: float, *, log=None) -> dict:
             route = _pa.get(s["symbol"], {}).get("route")
             if _pa and route:                 # stable plan: trade the PERSISTENT route (no re-rank)
                 jobs[s["symbol"]] = _trade_route_loop(s["symbol"], deadline, route, log=log)
-            elif _pa:                         # plan assigned no fresh route this window → idle/wait
+            elif _pa:   # stable plan, but no route assigned to this hauler (fewer fresh routes than
+                        # haulers) → fall back to the re-ranking trade loop: it trades the best
+                        # available route if one appears, and only idles when none is profitable.
                 jobs[s["symbol"]] = _trade_loop(s["symbol"], deadline, system, market_wps, log=log)
             else:                             # stable plan OFF: existing diversified per-round re-rank
                 rank = i if KNOBS.get("route_diversify") else 0
