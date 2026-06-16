@@ -269,7 +269,8 @@ async def st_knobs() -> str:
     """Read the engine's current strategy knobs — for auditing how the engine is behaving.
 
     Knobs: min_margin, buy_buffer, max_ships, probe_buffer, map_target, max_probes,
-    reserve_floor (hard cash floor), window_minutes (autopilot window / OODA cadence),
+    reserve_floor (ship-reinvest floor), max_spend_frac (working-capital guard — cap one
+    trade's buy at this fraction of credits), window_minutes (autopilot window / OODA cadence),
     sink_volume_mult + sink_supply_cutoff (saturation damping), route_diversify (spread
     haulers across the top-N routes)."""
     from . import fleet
@@ -282,13 +283,14 @@ async def st_tune(knob: str, value: str) -> str:
     running autopilot immediately. This is the strategist's micro-control; for a whole
     doctrine in one move use st_strategy instead. Examples:
       st_tune("min_margin", "15")        — surface trade routes in a thin market
-      st_tune("reserve_floor", "100000") — keep a 100k cash cushion (block auto-buys below it)
+      st_tune("max_spend_frac", "0.3")   — commit at most 30% of cash to any one buy (safer)
       st_tune("window_minutes", "8")     — tighter window → faster OODA cadence
       st_tune("sink_supply_cutoff", "HIGH") — stop selling into importers already at HIGH supply
 
     Args:
         knob: min_margin | buy_buffer | max_ships | probe_buffer | map_target | max_probes |
-            reserve_floor | window_minutes | sink_volume_mult | sink_supply_cutoff | route_diversify
+            reserve_floor | max_spend_frac | window_minutes | sink_volume_mult |
+            sink_supply_cutoff | route_diversify
         value: the new value (a number, or a supply tier like "HIGH" for sink_supply_cutoff)
     """
     from . import fleet

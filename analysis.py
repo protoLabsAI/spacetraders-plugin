@@ -157,3 +157,29 @@ def best_route(markets: list[dict], min_margin: int = 1,
 
 # Backward-compat alias — callers should prefer best_route.
 best_arbitrage = best_route
+
+
+def affordable_units(credits: int, unit_price, room: int, vol_cap: int,
+                     *, max_spend_frac: float = 0.5) -> int:
+    """How many units to buy in ONE trade without draining the treasury.
+
+    Sizes a purchase by the smaller of three caps: cargo ``room``, the saturation cap
+    ``vol_cap`` (≈ one tier-step of the sink's tradeVolume), and — the working-capital guard
+    the engine was missing — the cash we'll commit, at most ``max_spend_frac`` of current
+    ``credits``. Without the cash cap, a single high-value buy (a full hold of ASSAULT_RIFLES
+    at ~80k against a 109k treasury) spends almost everything into cargo, and a sell leg that
+    doesn't fully realize then craters the agent (the documented crash). Capping per-trade
+    spend to a fraction of cash means even a failed trade leaves most of the treasury intact,
+    while small trades still proceed at low credits — no deadlock. ``max_spend_frac >= 1``
+    disables the cash cap. Returns 0 when nothing is affordable (caller skips the buy).
+
+    Pure: no I/O, host-free testable.
+    """
+    room = max(0, room)
+    vol_cap = max(0, vol_cap)
+    if not unit_price or unit_price <= 0:        # price unknown → fall back to size caps only
+        return min(room, vol_cap)
+    if max_spend_frac >= 1:                       # cash cap disabled
+        return min(room, vol_cap)
+    budget = max(0, int(max_spend_frac * max(int(credits), 0)))
+    return max(0, min(room, vol_cap, budget // int(unit_price)))

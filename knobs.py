@@ -36,7 +36,9 @@ KNOBS = (
     .define("probe_buffer", 150_000, lo=0, help="keep this reserve before scouting-buys")
     .define("map_target", 8, lo=1, help="markets in the price map before arbitrage surfaces")
     .define("max_probes", 5, lo=0, help="parallel scouts")
-    .define("reserve_floor", 0, lo=0, help="hard cash floor — no auto-buy below this")
+    .define("reserve_floor", 0, lo=0, help="hard cash floor — no ship reinvest below this")
+    .define("max_spend_frac", 0.5, lo=0.1, hi=1.0,
+            help="cap one trade's buy at this fraction of credits (working-capital guard; 1=off)")
     .define("window_minutes", 15.0, lo=1.0, help="autopilot window length / OODA cadence (min)")
     .define("max_drift_min", 30.0, lo=1.0,
             help="st_travel refuses an auto-DRIFT leg longer than this (min) — raise for reach")

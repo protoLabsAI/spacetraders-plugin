@@ -131,27 +131,43 @@ async def _held(sym: str, good: str) -> int:
 
 
 async def _buy(sym: str, good: str, target: int, *, max_price: float | None = None, log=None) -> None:
-    """Buy up to ``target`` units of ``good``. Profitability guard: if ``max_price``
-    is set and the live unit price exceeds it, buy NOTHING — a buy above the ceiling
-    is a guaranteed loss (a saturated market or an over-priced contract good)."""
+    """Buy up to ``target`` units of ``good`` — bounded by two guards:
+
+      * profitability: if ``max_price`` is set and the live unit price exceeds it, buy NOTHING
+        (a buy above the ceiling is a guaranteed loss — a saturated market or over-priced
+        contract good);
+      * working capital: never commit more than ``max_spend_frac`` of current credits to this
+        buy, so one high-value good can't drain the treasury into cargo and crater us when the
+        sell leg doesn't realize (analysis.affordable_units — the documented ASSAULT_RIFLES crash).
+    """
+    from .analysis import affordable_units
     await C.call("POST", f"/my/ships/{sym}/dock")
-    if max_price is not None:
-        s = await _ship(sym)
-        wp = s["nav"]["waypointSymbol"]
-        try:
-            m = await C.call("GET", f"/systems/{T._system_of(wp)}/waypoints/{wp}/market")
-            price = next((g["purchasePrice"] for g in m.get("tradeGoods", []) if g["symbol"] == good), None)
-        except C.SpaceTradersError:
-            price = None
-        if price is not None and price > max_price:
-            if log:
-                log(f"{sym}: SKIP buy {good} @ {price} > ceiling {max_price:.0f} (would lose money)")
-            return
+    # Live unit price — needed for BOTH guards. Fetched once up front (a buy is one round trip,
+    # so the extra market read is cheap relative to the leg).
+    s = await _ship(sym)
+    wp = s["nav"]["waypointSymbol"]
+    try:
+        m = await C.call("GET", f"/systems/{T._system_of(wp)}/waypoints/{wp}/market")
+        price = next((g["purchasePrice"] for g in m.get("tradeGoods", []) if g["symbol"] == good), None)
+    except C.SpaceTradersError:
+        price = None
+    if max_price is not None and price is not None and price > max_price:
+        if log:
+            log(f"{sym}: SKIP buy {good} @ {price} > ceiling {max_price:.0f} (would lose money)")
+        return
+    frac = KNOBS.get("max_spend_frac")
+    if frac is None:                       # explicit: a missing knob disables the cap, NOT a 0.0 value
+        frac = 1.0
     while await _held(sym, good) < target:
         s = await _ship(sym)
         room = s["cargo"]["capacity"] - s["cargo"]["units"]
         want = min(target - await _held(sym, good), room, 20)
+        if price:   # working-capital cap, re-checked against the LIVE (shared) treasury each chunk
+            want = affordable_units(await _credits(), price, room, want, max_spend_frac=frac)
         if want <= 0:
+            if log and price:
+                log(f"{sym}: holding cash — {good} @ {price} exceeds the per-trade cap "
+                    f"({frac:g}× credits); bought {await _held(sym, good)}/{target}")
             break
         try:
             r = await C.call("POST", f"/my/ships/{sym}/purchase",
