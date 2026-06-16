@@ -43,7 +43,7 @@ def rank_routes(markets: list[dict], min_margin: int = 1,
     cutoff = _supply_tier(sink_supply_cutoff)
 
     exports: dict[str, list] = {}    # good -> [(purchasePrice, waypoint, tradeVolume, supply)]
-    imports: dict[str, list] = {}    # good -> [(sellPrice, waypoint, supply)]
+    imports: dict[str, list] = {}    # good -> [(sellPrice, waypoint, supply, tradeVolume)]
     exchanges: dict[str, list] = {}  # good -> [(purchasePrice, sellPrice, waypoint, tradeVolume)]
     for market in markets:
         waypoint = market.get("waypointSymbol")
@@ -65,7 +65,7 @@ def rank_routes(markets: list[dict], min_margin: int = 1,
             elif gtype == "IMPORT":
                 if sp is None or _supply_tier(supply) >= cutoff:   # saturation guard
                     continue
-                imports.setdefault(symbol, []).append((sp, waypoint, supply))
+                imports.setdefault(symbol, []).append((sp, waypoint, supply, vol))
             elif gtype == "EXCHANGE":
                 if bp is None or sp is None:
                     continue
@@ -74,7 +74,7 @@ def rank_routes(markets: list[dict], min_margin: int = 1,
     primary: list[dict] = []
     for good in set(exports) & set(imports):
         buy_price, buy_wp, buy_vol, _ = min(exports[good], key=lambda x: x[0])
-        sell_price, sell_wp, _ = max(imports[good], key=lambda x: x[0])
+        sell_price, sell_wp, _, sink_vol = max(imports[good], key=lambda x: x[0])
         if buy_wp == sell_wp:
             continue
         margin = int(sell_price - buy_price)
@@ -82,7 +82,9 @@ def rank_routes(markets: list[dict], min_margin: int = 1,
             continue
         primary.append({"good": good, "buy_at": buy_wp, "sell_at": sell_wp,
                         "profit_per_unit": margin, "volume": buy_vol,
-                        "kind": "export→import", "score": margin * max(buy_vol, 1)})
+                        "buy_price": buy_price, "sell_price": sell_price,
+                        "sink_volume": sink_vol, "kind": "export→import",
+                        "score": margin * max(buy_vol, 1)})
     if primary:
         return sorted(primary, key=lambda r: r["score"], reverse=True)
 
@@ -90,7 +92,7 @@ def rank_routes(markets: list[dict], min_margin: int = 1,
     fallback: list[dict] = []
     for good, listings in exchanges.items():
         for buy_price, _, buy_wp, buy_vol in listings:
-            for _, sell_price, sell_wp, _ in listings:
+            for _, sell_price, sell_wp, sell_vol in listings:
                 if buy_wp == sell_wp:
                     continue
                 margin = int(sell_price - buy_price)
@@ -98,7 +100,11 @@ def rank_routes(markets: list[dict], min_margin: int = 1,
                     continue
                 fallback.append({"good": good, "buy_at": buy_wp, "sell_at": sell_wp,
                                  "profit_per_unit": margin, "volume": buy_vol,
-                                 "kind": "exchange", "score": margin * max(buy_vol, 1)})
+                                 "buy_price": buy_price, "sell_price": sell_price,
+                                 # the SINK is the sell waypoint — size the saturation cap
+                                 # against ITS tradeVolume, not the buy leg's.
+                                 "sink_volume": sell_vol, "kind": "exchange",
+                                 "score": margin * max(buy_vol, 1)})
     return sorted(fallback, key=lambda r: r["score"], reverse=True)
 
 
