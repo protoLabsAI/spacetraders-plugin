@@ -54,6 +54,8 @@ KNOBS = (
             help="persistent reconcile-not-replan plan: haulers keep routes, probes hold endpoints (A/B)")
     .define("route_strikes", 2, lo=1,
             help="windows a hauler holds a route after it drops out of the fresh ranking")
+    .define("strategist_cadence_min", 1440, lo=15,
+            help="OODA tick cadence target (min) — daily by default; the strategist steers slowly")
 )
 KNOBS.preset("balanced", {}, blurb="contracts seed, trade compounds, dedicated drones mine")
 KNOBS.preset("trade-max",
@@ -66,6 +68,15 @@ KNOBS.preset("contract-grind", {"mining": True, "buy_buffer": 800_000, "min_marg
 
 _STRATEGY = {"name": "balanced"}   # active preset name (KNOBS holds the values, `mining` knob)
 _OVERRIDES: dict = {}              # {ship_symbol: role} per-ship pins (st_assign)
+_PREV_VALUE: dict = {}            # value each knob held BEFORE its last accepted change (anti-oscillation)
+
+
+def _is_oscillation(before, after, prev) -> bool:
+    """A tune oscillates if it REVERSES the knob's last change — it moves the value
+    (after != before) right back to what it was before that change (after == prev). Bounded
+    authority (ADR engine-rewrite stage 4): the strategist steers slowly and shouldn't flip-flop
+    a knob before a window shows the effect. Pure — host-free testable."""
+    return after != before and after == prev
 
 
 # ── persistence ────────────────────────────────────────────────────────────────────────
@@ -123,12 +134,23 @@ def decisions() -> list:
 
 def set_knob(name: str, value) -> str:
     """Tune one knob (typed-coerced, clamped, validated); log the change + persist it so it
-    survives a restart."""
-    before = KNOBS.values()
+    survives a restart. Bounded authority: a tune that immediately REVERTS the knob's last
+    change is rejected (no flip-flopping — give a change a window to show its effect)."""
+    before_all = KNOBS.values()
+    before = before_all.get(name)
     msg = KNOBS.set(name, value)
-    if KNOBS.values() != before:                 # only a real change is a decision
-        DLOG.record("tune", msg)
-        _save()
+    after_all = KNOBS.values()
+    if after_all == before_all:                  # no-op / clamped-to-same / unknown knob
+        return msg
+    after = after_all.get(name)
+    if name in _PREV_VALUE and _is_oscillation(before, after, _PREV_VALUE[name]):
+        KNOBS.set(name, before)                  # restore — don't flip-flop within a window
+        DLOG.record("tune", f"ignored oscillating {name} → {after} (reverts → {before})")
+        return (f"ignored {name}={after}: it reverts the last change (was {before}). The engine "
+                f"won't flip-flop a knob — give the change a window to show its effect first.")
+    _PREV_VALUE[name] = before                   # remember what we changed away from
+    DLOG.record("tune", msg)
+    _save()
     return msg
 
 

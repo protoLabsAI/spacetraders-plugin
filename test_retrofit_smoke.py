@@ -87,6 +87,28 @@ def test_knobs_persist_across_a_restart(knobs_mod):
     assert K.KNOBS.get("buy_buffer") == 23_000            # the tune survived
 
 
+def test_demotion_knobs_present(knobs_mod):
+    # Stage-4 (strategist demotion) + stage-3 knobs are registered with safe defaults.
+    K = knobs_mod
+    assert K.KNOBS.get("strategist_cadence_min") == 1440   # daily — the strategist steers slowly
+    assert K.KNOBS.get("stable_plan") is False             # A/B, default off
+    assert K.KNOBS.get("route_strikes") == 2
+
+
+def test_oscillating_tune_is_rejected(knobs_mod):
+    # Bounded authority: a tune that reverts the knob's last change is refused (no flip-flopping).
+    K = knobs_mod
+    K._PREV_VALUE.clear()
+    assert K.KNOBS.get("min_margin") == 30
+    K.set_knob("min_margin", "15")                         # 30 → 15 (accepted)
+    assert K.KNOBS.get("min_margin") == 15
+    out = K.set_knob("min_margin", "30")                   # 15 → 30 would revert the last change
+    assert "ignored" in out.lower()
+    assert K.KNOBS.get("min_margin") == 15                 # rejected — value held, not flipped back
+    K.set_knob("min_margin", "40")                         # a DISTINCT value is still allowed
+    assert K.KNOBS.get("min_margin") == 40
+
+
 def test_reapplying_current_strategy_keeps_tunes(knobs_mod):
     # A redundant st_strategy(current) must not wipe manual tunes back to the preset's values.
     K = knobs_mod
