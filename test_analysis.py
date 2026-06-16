@@ -101,14 +101,16 @@ def test_route_carries_sink_price_and_volume_for_confirmed_dispatch():
 
 
 def test_exchange_route_also_carries_prices():
+    # Distinct volumes per waypoint so sink_volume must be the SELL (sink) leg, not the buy leg.
     markets = [
         _mkt("A", [_good("ANTIMATTER", "EXCHANGE", purchase=100, sell=90, vol=10)]),
-        _mkt("B", [_good("ANTIMATTER", "EXCHANGE", purchase=160, sell=150, vol=10)]),
+        _mkt("B", [_good("ANTIMATTER", "EXCHANGE", purchase=160, sell=150, vol=7)]),
     ]
-    r = analysis.best_route(markets, min_margin=1)
+    r = analysis.best_route(markets, min_margin=1)   # buy A (100) → sell B (150)
     assert r["kind"] == "exchange"
     assert r["buy_price"] == 100 and r["sell_price"] == 150
-    assert r["sink_volume"] == 10
+    assert r["sink_volume"] == 7      # the SINK (sell_wp=B) tradeVolume, not buy_wp=A's 10
+    assert r["volume"] == 10          # buy-leg volume (A) still carried for scoring
 
 
 # ── working-capital sizing (affordable_units) ──────────────────────────────────────────────
