@@ -810,7 +810,7 @@ async def _station_loop(sym: str, deadline: float, waypoint: str, *, log=None) -
     if not await travel_to(sym, waypoint, log=log):
         return f"could not reach station {waypoint}"
     from . import prices
-    polls = 0
+    polls, errors = 0, 0
     while _now() < deadline:
         try:
             await C.call("POST", f"/my/ships/{sym}/dock")
@@ -819,8 +819,13 @@ async def _station_loop(sym: str, deadline: float, waypoint: str, *, log=None) -
             if m.get("tradeGoods"):
                 prices.record_market(system, waypoint, m["tradeGoods"])
                 polls += 1
-        except C.SpaceTradersError:
-            pass
+            errors = 0
+        except C.SpaceTradersError as e:
+            errors += 1
+            if log:
+                log(f"{sym}: station read failed at {waypoint} ({e}) [{errors}/3]")
+            if errors >= 3:   # waypoint invalid / persistent failure — don't hold a dead post all window
+                return f"abandoned station {waypoint} after {errors} consecutive errors ({polls} refreshes)"
         await asyncio.sleep(_STATION_POLL)
     return f"stationed at {waypoint} ({polls} price refreshes)"
 
@@ -837,10 +842,14 @@ async def _trade_route_loop(sym: str, deadline: float, route: dict, *, log=None)
                               sink_vol=route.get("sink_volume"), log=log)
         if log:
             log(f"{sym}: {res}")
+        # Key the bail on the SUCCESS marker (job_trade returns "traded …" only on a completed
+        # round trip) rather than matching a failure string — any non-trade outcome (skipped /
+        # couldn't reach / holding cash) stops the loop, and the miss strikes the route at the
+        # next reconcile.
+        if not res.startswith("traded"):
+            return f"completed {runs} fixed-route trade run(s); stopped: {res}"
         runs += 1
-        if "skipped" in res:   # route went unprofitable/unreachable — stop, let reconcile strike it
-            break
-    return f"completed {runs} fixed-route trade run(s)" if runs else "route unworkable this window"
+    return f"completed {runs} fixed-route trade run(s)"
 
 
 async def autopilot(minutes: float, *, log=None) -> dict:
@@ -997,7 +1006,11 @@ async def _recover(result) -> bool:
     err = (result or {}).get("error") or ""
     if "4113" in err or "reset_date" in err:
         from . import plan as _plan
-        _plan.clear()   # the plan references per-reset waypoints/ship ids — forget it on a wipe
+        # 4113 means the universe HAS already wiped — the plan's waypoints/ship-ids are invalid
+        # NOW, so clear it regardless of whether the re-registration below succeeds (a failed
+        # recovery would only re-kick into the same wall; a later window rebuilds the plan fresh).
+        # The learned-route memory (routes.py) survives the wipe; the per-reset plan does not.
+        _plan.clear()
         try:
             status = await C.recover_from_reset()
         except Exception as e:  # noqa: BLE001
