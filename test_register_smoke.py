@@ -26,6 +26,7 @@ EXPECTED_VERIFIERS = {
     "spacetraders:credits", "spacetraders:fleet_size", "spacetraders:cargo_capacity",
     "spacetraders:net_worth", "spacetraders:drawdown", "spacetraders:reset_detected",
     "spacetraders:contract_deadline", "spacetraders:opportunity",
+    "spacetraders:charted_count",
 }
 
 
@@ -49,9 +50,9 @@ def test_register_contributes_the_full_set(reg):
     assert set(reg.handlers) == {"spacetraders.window_closed", "spacetraders.reset_recovered"}
     # goal hook (stop + ladder), crew, engine surface, tools
     assert len(reg.goal_hooks) == 1
-    assert len(reg.subagents) == 5
+    assert len(reg.subagents) == 6          # crew + the v2.0 explorer
     assert reg.surfaces == ["spacetraders-fleet"]
-    assert len(reg.tools) >= 38
+    assert len(reg.tools) >= 46             # 38 + the v2.0 exploration/construction set
     # routers: dashboard page (default prefix), gated /api data router, test route ("")
     prefixes = [p for p, _ in reg.routers]
     assert prefixes.count(None) == 1

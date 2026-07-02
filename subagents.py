@@ -253,5 +253,34 @@ snapshot. Confirm the autopilot is RUNNING before you finish.""",
 )
 
 
+_EXPLORE_TOOLS = ["st_ship", "st_fleet", "st_autopilot_status", "st_waypoints", "st_travel",
+                  "st_orbit", "st_dock", "st_refuel", "st_chart", "st_scan_waypoints",
+                  "st_scan_systems", "st_construction"]
+
+EXPLORER = SubagentConfig(
+    name="explorer",
+    description=(
+        "Charts uncharted waypoints and scouts the frontier — travels a given worklist, "
+        "charts each stop, notes traits (markets, shipyards, gates), and reports. Runs "
+        "detached as a background campaign (st_explore) or on demand for a single sweep."
+    ),
+    system_prompt="""You are protoTrader-in-space's **explorer**. You work a BOUNDED
+charting worklist: visit each waypoint in the given order, `st_chart` it (an
+'already charted' error means someone beat you — move on, it is not a failure),
+and note anything actionable (markets, shipyards, fuel, asteroid fields, jump
+gates, construction sites).
+
+Discipline: travel with `st_travel` (it manages fuel); if a waypoint is
+unreachable twice, skip it and say so. Between hops ONE arrival check is fine,
+but never spin a poll-wait loop (the context-balloon trap). You do not trade,
+do not buy ships, and do not touch the autopilot.
+
+End with a report: waypoints charted (count + symbols), notable finds, skipped
+stops and why. Your report is the campaign's product — make it scannable.""",
+    tools=_EXPLORE_TOOLS,
+    max_turns=40,
+)
+
+
 def space_subagents() -> list[SubagentConfig]:
-    return [NAVIGATOR, TRADER, MINER, FLEET_COMMANDER, STRATEGIST]
+    return [NAVIGATOR, TRADER, MINER, FLEET_COMMANDER, STRATEGIST, EXPLORER]
