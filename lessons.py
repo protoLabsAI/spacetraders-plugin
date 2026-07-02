@@ -19,7 +19,11 @@ import logging
 
 log = logging.getLogger(__name__)
 
-_COUNT = {"windows": 0}   # process-lifetime window counter (module state, like fleet._LOG)
+# Process-lifetime window counter (module state, like fleet._LOG). A restart resets the
+# cadence — the first post-restart lesson waits a full `lesson_every` windows. That's
+# deliberate slack, not drift: the cadence bounds LLM spend, it doesn't schedule anything,
+# so persisting it would buy nothing (and the counter feeds no control flow).
+_COUNT = {"windows": 0}
 
 _SYSTEM = (
     "You are the fleet-operations analyst for an autonomous SpaceTraders trading fleet. "
