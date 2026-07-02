@@ -378,6 +378,68 @@ def register(registry) -> None:
     registry.register_surface(_fleet_surface_start, stop=_fleet_surface_stop,
                               name="spacetraders-fleet")
 
+    # A2A card skills (v2.1, docs/sdk-round2.md) — advertised on the agent card so OTHER
+    # agents (a portfolio commander over delegate_to, a sibling trader) consume this
+    # fleet structurally. The declared output_schema + result_mime make the executor's
+    # structured finalizer enforce the shape (#570): the caller gets JSON it can parse,
+    # not prose it must scrape. This is the Syndicate's wire format (docs/syndicate.md).
+    if hasattr(registry, "register_a2a_skill"):
+        registry.register_a2a_skill({
+            "id": "fleet_report",
+            "name": "Fleet report",
+            "description": (
+                "Structured snapshot of this agent's SpaceTraders fleet: credits, net "
+                "worth, ship count by role, engine state, active strategy, and credits/hr. "
+                "Ground truth from the live game API (st_report / st_agent)."
+            ),
+            "tags": ["spacetraders", "fleet", "telemetry"],
+            "examples": ["Send me your fleet report."],
+            "output_schema": {
+                "type": "object",
+                "required": ["agent", "credits", "ships", "engine_running"],
+                "properties": {
+                    "agent": {"type": "string", "description": "call sign"},
+                    "credits": {"type": "integer"},
+                    "net_worth": {"type": "integer",
+                                  "description": "credits + conservative fleet book value"},
+                    "ships": {"type": "integer"},
+                    "roles": {"type": "object",
+                              "description": "role -> count (probes/miners/traders/…)"},
+                    "engine_running": {"type": "boolean"},
+                    "strategy": {"type": "string"},
+                    "per_hour": {"type": "integer",
+                                 "description": "credits/hr over the last engine window"},
+                },
+            },
+            "result_mime": "application/json",
+        })
+        registry.register_a2a_skill({
+            "id": "quote_route",
+            "name": "Quote a trade route",
+            "description": (
+                "The best FRESH trade route this agent's price map can confirm right now "
+                "(st_trade_routes): good, buy/sell waypoints, margin per unit. Empty route "
+                "fields mean nothing fresh clears the margin floor — not an error."
+            ),
+            "tags": ["spacetraders", "trade", "intel"],
+            "examples": ["Quote me your best route.", "Any route better than 15% margin?"],
+            "output_schema": {
+                "type": "object",
+                "required": ["has_route"],
+                "properties": {
+                    "has_route": {"type": "boolean"},
+                    "system": {"type": "string"},
+                    "good": {"type": "string"},
+                    "buy_at": {"type": "string"},
+                    "sell_at": {"type": "string"},
+                    "margin_per_unit": {"type": "integer"},
+                    "margin_pct": {"type": "number"},
+                },
+            },
+            "result_mime": "application/json",
+        })
+        log.info("[spacetraders] registered A2A card skills: fleet_report, quote_route")
+
     # /spacetraders chat command (ADR 0018) — a user-only control command: instant
     # fleet status straight off the live API, no model turn, no tokens spent. The
     # agent can't invoke it; that's the seam's design (control plane ≠ tool plane).

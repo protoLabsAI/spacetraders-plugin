@@ -39,7 +39,7 @@ bar — a seam adopted for parity theater would be worse than a gap.
 | `on` | ✅ v1.8 | own-bus housekeeping: `window_closed` → re-arm tripwires; `reset_recovered` → clear epoch state |
 | `register_watch_hook` | ✅ v1.8 | DecisionLog entry per trip/expiry/stall + the flatline reflex (`on_stalled` → diagnosis turn) |
 | `register_surface` | ✅ (pre-1.7) | engine shutdown lifecycle (boot re-arm turned out unnecessary — watches persist and keep polling host-side across restarts) |
-| `register_a2a_skill` | 🔜 v2.1 | typed `fleet_report` / `quote_route` (output_schema + result_mime) |
+| `register_a2a_skill` | ✅ v2.1 | typed `fleet_report` / `quote_route` (output_schema + result_mime, finalizer-enforced) — the Syndicate's wire format (`docs/syndicate.md`) |
 | `register_late_tool_factory` | ⛔ | for meta-tools that wrap the *whole* toolset (e.g. execute_code); ST contributes domain tools only |
 | `register_mcp_server` | ⛔ | seam manages config-gated *external MCP processes*; ST wraps a plain REST API natively |
 | `register_knowledge_store` / `register_embedder` | ⛔ | infra-swap seam for backend plugins; ST is a knowledge *consumer* (v1.9) |
@@ -169,14 +169,27 @@ goal verifiers):
   IMPOSSIBLE today: the v2 API exposes no `/my/factions` reputation surface (checked
   against the OpenAPI spec), so that matrix row is an API-level ⛔, not a deferral.
 
-### v2.1 — the Syndicate
+### v2.1 — the Syndicate (SHIPPED)
 
 - `register_a2a_skill`: typed `fleet_report` / `quote_route` (`output_schema` +
-  `result_mime`) so other agents consume fleet state and price intel structurally.
-- The multi-agent recipe: several instances with different doctrines (mining-heavy /
-  trade-max / explorer), federated by a portfolio commander over `delegate_to`
-  (ADR 0025), sharing intel over A2A — documented as a runnable setup, not code.
-- Final pass on the ⛔ rows: confirm or overturn each N/A verdict.
+  `result_mime`) so other agents consume fleet state and price intel structurally —
+  parseable JSON via the executor's structured finalizer, not prose to scrape.
+- The multi-agent recipe is a **runbook, not code** (`docs/syndicate.md`): doctrine-split
+  instances (trade-max / mining / scout) federated by a commander over `delegate_to`
+  (ADR 0025), pooling construction supply on one jump gate. Composes existing host
+  seams; the plugin's only contribution is the wire format.
+- **Final ⛔-row pass — every N/A verdict re-examined and CONFIRMED:**
+  `register_late_tool_factory` (domain tools only, nothing wraps the whole set) ·
+  `register_mcp_server` (native REST wrap, no external MCP process) ·
+  `register_knowledge_store`/`register_embedder` (consumer, not backend) ·
+  `register_thread_id_resolver` (no external thread↔session mapping) ·
+  `register_middleware` (still no cross-cutting model/tool concern hooks don't serve) ·
+  `run_subagent`/`subagent_types` (reached via workflow recipes) · `host.invoke`
+  (not a chat surface) · `host.apply_settings` (mid-turn reload hazard, v1.9 verdict) ·
+  `reputation` verifier (API-level impossible — no `/my/factions` surface).
+
+**Parity is COMPLETE**: every seam in the matrix is ✅ adopted with a genuine use or
+⛔ with a standing rationale. New-seam gaps found by the program: protoAgent #1631–#1642.
 
 ## protoAgent issues this program filed
 
@@ -188,6 +201,12 @@ goal verifiers):
 | [#1634](https://github.com/protoLabsAI/protoAgent/issues/1634) | knowledge lifecycle: purge / TTL / epoch | v1.9 wipe-scoped memory |
 | [#1635](https://github.com/protoLabsAI/protoAgent/issues/1635) | `sdk.spawn_background` (with ADR 0070) | v2.0 exploration campaigns |
 | [#1636](https://github.com/protoLabsAI/protoAgent/issues/1636) | typed event contracts in `emits:` | v1.7 cross-plugin consumers (Discord feed) |
+| [#1637](https://github.com/protoLabsAI/protoAgent/issues/1637) | testkit `FakeRegistry` missing `register_chat_command` | v1.8 register smoke (silent hasattr-skip) |
+| [#1638](https://github.com/protoLabsAI/protoAgent/issues/1638) | `sdk.list_watches` / `clear_watch` (spec removal leaks zombie watches) | v1.8 `arm_all` reconcile |
+| [#1639](https://github.com/protoLabsAI/protoAgent/issues/1639) | background jobs ignore subagent tool fences (role guidance only) | v2.0 explorer campaigns |
+| [#1640](https://github.com/protoLabsAI/protoAgent/issues/1640) | iframe event bridge: replay-on-subscribe + hidden delivery | v1.7 dashboard (drops the 60s poll) |
+| [#1641](https://github.com/protoLabsAI/protoAgent/issues/1641) | documented verifier `ctx` contract (invoker identity) | v1.8 per-watch high-water marks |
+| [#1642](https://github.com/protoLabsAI/protoAgent/issues/1642) | plugin-owned recurring jobs + uninstall cleanup | the strategist's daily tick |
 
 New gaps found mid-stage get filed the same way — that feedback loop *is* the
 point of the program.

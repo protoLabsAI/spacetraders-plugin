@@ -53,6 +53,11 @@ def test_register_contributes_the_full_set(reg):
     assert len(reg.subagents) == 6          # crew + the v2.0 explorer
     assert reg.surfaces == ["spacetraders-fleet"]
     assert len(reg.tools) >= 46             # 38 + the v2.0 exploration/construction set
+    # v2.1 A2A card skills: typed, finalizer-enforced (output_schema + result_mime)
+    skills = {s["id"]: s for s in reg.a2a_skills}
+    assert set(skills) == {"fleet_report", "quote_route"}
+    assert all(s.get("output_schema") and s.get("result_mime") == "application/json"
+               for s in skills.values())
     # routers: dashboard page (default prefix), gated /api data router, test route ("")
     prefixes = [p for p, _ in reg.routers]
     assert prefixes.count(None) == 1
