@@ -300,7 +300,14 @@ def register(registry) -> None:
         watches.clear_epoch_state()
         log.info("[spacetraders] universe reset — epoch state (high-water mark) cleared")
 
+    async def _synthesize(payload) -> None:
+        # v1.9: every lesson_every-th window, distill ground truth into ONE durable
+        # lesson (sdk.complete → knowledge_add, epoch-stamped). See lessons.py.
+        from . import lessons
+        await lessons.on_window_closed((payload or {}).get("data") or {})
+
     registry.on("spacetraders.window_closed", _rearm)
+    registry.on("spacetraders.window_closed", _synthesize)
     registry.on("spacetraders.reset_recovered", _epoch_clear)
 
     # Console fleet dashboard (ADR 0026) — TWO routers at DISTINCT prefixes: the

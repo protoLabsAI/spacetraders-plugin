@@ -191,7 +191,7 @@ async def _snapshot() -> dict:
     strat = fleet.current_strategy()
     status = await _server_status()
     from . import routes as _routes
-    learned = _routes.recall_routes("-".join(agent["headquarters"].split("-")[:2]))
+    learned = await _routes.recall_routes("-".join(agent["headquarters"].split("-")[:2]))
     data = {
         "agent": {"symbol": agent["symbol"], "credits": agent["credits"],
                   "hq": agent["headquarters"], "faction": agent.get("startingFaction"),
