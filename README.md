@@ -16,7 +16,7 @@ extension set, all auto-discovered.
 
 | Contribution | What |
 |---|---|
-| **Tools** (34) | register, agent/fleet status, fuel-aware `st_travel`, markets, `st_trade_routes`, contracts, mining, buy/sell, shipyard, the background **growth engine** (`st_autopilot_start`/`stop`/`status`), and the **control surface** — `st_report` (telemetry), `st_strategy` (doctrine), `st_tune` (knobs), `st_assign` (per-ship pins) |
+| **Tools** (38) | register, agent/fleet status, fuel-aware `st_travel`, markets, `st_trade_routes`, contracts, mining, buy/sell, shipyard, the background **growth engine** (`st_autopilot_start`/`stop`/`status`), and the **control surface** — `st_report` (telemetry), `st_strategy` (doctrine), `st_tune` (knobs), `st_assign` (per-ship pins) |
 | **Subagents** (5) | `navigator`, `trader`, `miner`, `fleet-commander`, `strategist` (the OODA brain) |
 | **Workflows** | `procurement-run`, `mining-run`, `fleet-bootstrap` (`workflows/`) |
 | **Skills** | `manage-the-fleet` (the OODA strategist loop), `maximize-credits-per-hour`, `play-spacetraders`, `run-a-procurement-contract` (`skills/`) |
@@ -26,6 +26,10 @@ extension set, all auto-discovered.
 **Architecture:** the fleet runs as **two loops** — a deterministic **engine** (the muscle)
 steered by an agentic **OODA strategist** (the brain) between windows. See
 [`docs/two-loop-fleet.md`](docs/two-loop-fleet.md).
+
+**Roadmap:** [`docs/sdk-round2.md`](docs/sdk-round2.md) — full plugin-SDK **seam
+parity**: live events (v1.7), watch tripwires + the goal ladder (v1.8), wipe-scoped
+knowledge (v1.9), background exploration campaigns (v2.0), the A2A Syndicate (v2.1).
 
 ## Install
 
@@ -38,8 +42,9 @@ python -m server plugin install https://github.com/protoLabsAI/spacetraders-plug
 ```
 
 Or drop this directory into your protoAgent's `plugins/`. No core edits.
-Needs **protoAgent ≥ 0.20.0** (ADR 0026 views + ADR 0027 bundle discovery). Pure
-Python over `httpx` (a core dep) — no extra `pip install`.
+Needs **protoAgent ≥ 0.40.0** (the `graph.sdk` engine helpers — `supervise`,
+`Knobs`, telemetry; the manifest's `min_protoagent_version` gates older hosts).
+Pure Python over `httpx` (a core dep) — no extra `pip install`.
 
 ## Set up
 
