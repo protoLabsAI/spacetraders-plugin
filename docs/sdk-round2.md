@@ -55,12 +55,12 @@ bar — a seam adopted for parity theater would be worse than a gap.
 | `telemetry` / `DecisionLog` / `render_html` | ✅ | `st_report` envelope + dashboard panels |
 | `create_watch` | ✅ v1.8 | the tripwire suite (below) |
 | `run_in_session` | ✅ v1.8 | goal-ladder + flatline-reflex hooks; watch `run_prompt`s use it via the controller |
-| `knowledge_add` / `knowledge_search` | 🔜 v1.9 | route memory + post-window lessons (replaces the hand-rolled embeddings store) |
-| `complete` | 🔜 v1.9 | one-shot lesson synthesis at window close |
-| `config` | 🔜 v1.9 | replace direct `graph.config.LangGraphConfig` imports in `routes.py` / `seed_kb.py` |
+| `knowledge_add` / `knowledge_search` | ✅ v1.9 | epoch-stamped route memory + window lessons (replaced the hand-rolled store, which read a HARDCODED config path — wrong KB for instance-scoped agents) |
+| `complete` | ✅ v1.9 | lesson synthesis every `lesson_every`-th window (`lessons.py`) |
+| `config` | ✅ v1.9 | `routes.py` no longer needs config at all (the SDK owns store resolution); `seed_kb.py` keeps its direct read — it's a standalone bootstrap script, no live `STATE` to tap |
 | `host.publish` | ✅ v1.7 | via the `events.py` helper (engine runs off-register, needs the bound handle) |
 | `host.on` | ✅ v1.8 | the re-arm + epoch-clear listeners (via `registry.on`) |
-| `host.apply_settings` | 🔜 v1.9 | `save_token` stops hand-writing `secrets.yaml` |
+| `host.apply_settings` | ⛔ | `save_token` runs MID-TURN (from `st_register` / reset recovery) and `apply_settings` triggers a full graph reload — a reload under a running turn is the hazard, not a convenience. The direct scoped-secrets write (the #3 fix) hits the exact file the host seeds from; adopting the seam here would be parity theater. Right home: an operator-driven settings flow, which the console Test button already covers. |
 | `run_subagent` / `subagent_types` | ⛔ | reached via the workflows plugin's recipes; no direct call site |
 | `host.invoke` | ⛔ | for chat-surface plugins driving the agent from an external channel |
 

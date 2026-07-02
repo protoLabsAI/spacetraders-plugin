@@ -613,8 +613,8 @@ async def _ranked_routes(system: str, market_wps: list) -> list:
                          sink_supply_cutoff=KNOBS.get("sink_supply_cutoff"))
     if ranked:
         top = ranked[0]
-        routes.remember_route(system, top["good"], top["buy_at"], top["sell_at"],
-                              top["profit_per_unit"])
+        await routes.remember_route(system, top["good"], top["buy_at"], top["sell_at"],
+                                    top["profit_per_unit"])
     # Recalled routes (routes.recall_routes) are NO LONGER dispatched to haulers: a remembered
     # route can be from a prior wipe or a since-moved market, so buying on it blind is exactly the
     # dead-end loss (the "D40 attractor"). Recall now only SEEDS exploration — probes re-light

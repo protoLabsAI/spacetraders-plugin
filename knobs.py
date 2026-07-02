@@ -57,6 +57,8 @@ KNOBS = (
             help="windows a hauler holds a route after it drops out of the fresh ranking")
     .define("strategist_cadence_min", 1440, lo=15,
             help="OODA tick cadence target (min) — daily by default; the strategist steers slowly")
+    .define("lesson_every", 4, lo=0,
+            help="distill a durable lesson every Nth window (sdk.complete → KB); 0 = off")
 )
 KNOBS.preset("balanced", {}, blurb="contracts seed, trade compounds, dedicated drones mine")
 KNOBS.preset("trade-max",
