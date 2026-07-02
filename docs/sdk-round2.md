@@ -31,14 +31,14 @@ bar — a seam adopted for parity theater would be worse than a gap.
 | `register_subagent` | ✅ | navigator / trader / miner / fleet-commander / strategist |
 | skills dir (conventional) | ✅ | 4 skills incl. the OODA `manage-the-fleet` loop |
 | workflows dir (conventional) | ✅ | procurement-run / mining-run / fleet-bootstrap |
-| `register_goal_verifier` | ✅ → 🔜 v1.8 | credits / fleet_size / cargo_capacity today; + `net_worth`, `charted_count`, `reputation` |
-| `register_goal_hook` | ✅ → 🔜 v1.8 | stops the engine on achievement today; + `run_in_session` next-rung ladder |
-| `emit` | 🔜 v1.7 | engine lifecycle + economy events (`window_closed`, `trade_executed`, …) |
-| `register_chat_command` | 🔜 v1.7 | `/spacetraders` — instant fleet status without an agent turn |
-| `navigate` | 🔜 v1.7 | flip the console to the Fleet view when the engine starts |
-| `on` | 🔜 v1.8 | `reset_recovered` → clear epoch state (plan, price map, high-water mark) |
-| `register_watch_hook` | 🔜 v1.8 | DecisionLog entry per trip/expiry/stall |
-| `register_surface` | 🔜 v1.8 | boot lifecycle: re-arm watches, restore engine state after restart |
+| `register_goal_verifier` | ✅ (v1.8: 8 total) | credits / fleet_size / cargo_capacity + the tripwire five: `net_worth`, `drawdown`, `reset_detected`, `contract_deadline`, `opportunity` (`charted_count`/`reputation` move to v2.0 with the exploration tools they measure) |
+| `register_goal_hook` | ✅ v1.8 | stops the engine on achievement + `run_in_session` next-rung ladder |
+| `emit` | ✅ v1.7 | engine lifecycle + economy events (`window_closed`, `trade_executed`, …) |
+| `register_chat_command` | ✅ v1.7 | `/spacetraders` — instant fleet status without an agent turn |
+| `navigate` | ✅ v1.7 | flip the console to the Fleet view when the engine starts |
+| `on` | ✅ v1.8 | own-bus housekeeping: `window_closed` → re-arm tripwires; `reset_recovered` → clear epoch state |
+| `register_watch_hook` | ✅ v1.8 | DecisionLog entry per trip/expiry/stall + the flatline reflex (`on_stalled` → diagnosis turn) |
+| `register_surface` | ✅ (pre-1.7) | engine shutdown lifecycle (boot re-arm turned out unnecessary — watches persist and keep polling host-side across restarts) |
 | `register_a2a_skill` | 🔜 v2.1 | typed `fleet_report` / `quote_route` (output_schema + result_mime) |
 | `register_late_tool_factory` | ⛔ | for meta-tools that wrap the *whole* toolset (e.g. execute_code); ST contributes domain tools only |
 | `register_mcp_server` | ⛔ | seam manages config-gated *external MCP processes*; ST wraps a plain REST API natively |
@@ -53,13 +53,13 @@ bar — a seam adopted for parity theater would be worse than a gap.
 | `supervise` | ✅ | the engine's watchdog lifecycle |
 | `Knobs` / `make_knob_tools` | ✅ | 17 tunables + presets (`st_tune`, `st_strategy`) |
 | `telemetry` / `DecisionLog` / `render_html` | ✅ | `st_report` envelope + dashboard panels |
-| `create_watch` | 🔜 v1.8 | the tripwire suite (below) |
-| `run_in_session` | 🔜 v1.8 | goal-ladder hook; watch `run_prompt`s use it via the controller |
+| `create_watch` | ✅ v1.8 | the tripwire suite (below) |
+| `run_in_session` | ✅ v1.8 | goal-ladder + flatline-reflex hooks; watch `run_prompt`s use it via the controller |
 | `knowledge_add` / `knowledge_search` | 🔜 v1.9 | route memory + post-window lessons (replaces the hand-rolled embeddings store) |
 | `complete` | 🔜 v1.9 | one-shot lesson synthesis at window close |
 | `config` | 🔜 v1.9 | replace direct `graph.config.LangGraphConfig` imports in `routes.py` / `seed_kb.py` |
-| `host.publish` | 🔜 v1.7 | via the `events.py` helper (engine runs off-register, needs the host handle) |
-| `host.on` | 🔜 v1.8 | epoch-clear listener |
+| `host.publish` | ✅ v1.7 | via the `events.py` helper (engine runs off-register, needs the bound handle) |
+| `host.on` | ✅ v1.8 | the re-arm + epoch-clear listeners (via `registry.on`) |
 | `host.apply_settings` | 🔜 v1.9 | `save_token` stops hand-writing `secrets.yaml` |
 | `run_subagent` / `subagent_types` | ⛔ | reached via the workflows plugin's recipes; no direct call site |
 | `host.invoke` | ⛔ | for chat-surface plugins driving the agent from an external channel |
@@ -67,8 +67,8 @@ bar — a seam adopted for parity theater would be worse than a gap.
 ### Manifest surface
 
 `config`/`secrets`/`settings` ✅ · `views` ✅ · `min_protoagent_version` ✅ ·
-`emits:` 🔜 v1.7 · `subscribes:` 🔜 v1.8 · `test: true` + token test route 🔜 v1.7 ·
-`guide_url` 🔜 v1.7 · `requires_pip` stays `[]` (pure httpx — and see protoAgent
+`emits:` ✅ v1.7 · `subscribes:` ✅ v1.8 · `test: true` + token test route ✅ v1.7 ·
+`guide_url` ✅ v1.7 · `requires_pip` stays `[]` (pure httpx — and see protoAgent
 #1631 for why that matters on desktop).
 
 ## The stages
@@ -116,19 +116,24 @@ goal verifiers):
 | `spacetraders:flatline` | `stall_after` windows with no net-worth movement | the June 36–43k band, caught in one window |
 | `spacetraders:opportunity` | price-map spread > threshold | wake the strategist for a route it hasn't seen |
 
-- Armed idempotently (stable `watch_id`s) when the engine starts; `run_session` is
-  the durable Activity thread (`system:activity`) so no `InjectedState` is needed
-  in module scope (the known host-free-register constraint).
-- **`register_watch_hook`**: every trip/expiry/stall lands in the DecisionLog and
-  the dashboard's strategist panel.
-- **`register_surface`**: boot lifecycle — re-arm watches (they persist host-side;
-  re-arm covers a fresh instance), reload epoch state.
-- **Epoch hygiene**: `on("spacetraders.reset_recovered")` clears the persisted plan,
-  price map, and high-water mark — the cross-wipe staleness class (v1.4.1) handled
-  at the root.
-- **Goal ladder**: `net_worth` (credits + fleet book value + cargo mark-to-market),
-  `charted_count`, `reputation` verifiers; `on_achieved` → `run_in_session` proposes
-  the next rung (contracts → haulers → 1M → the frontier).
+- Armed idempotently (stable `watch_id`s) when the engine starts, and re-armed by an
+  own-bus `on("spacetraders.window_closed")` subscription — a met watch *finishes*
+  host-side, so the suite heals itself while the engine runs. `run_session` is the
+  durable Activity thread (`system:activity`) so no `InjectedState` is needed in
+  module scope (the known host-free-register constraint). Watches persist and keep
+  polling host-side across restarts — the planned boot re-arm turned out unnecessary.
+- **`register_watch_hook`**: every trip/expiry/stall lands in the DecisionLog; the
+  flatline reflex lives in `on_stalled` (a stall isn't "met" — the watch stays
+  active while the diagnosis turn runs). `st-flatline` leans on ADR 0067's stall
+  semantics deliberately: an unreachable `min` + evidence *buckets* (~2k) so credit
+  jitter reads as "unchanged" — the watch never mets, it only stalls.
+- **Epoch hygiene**: `on("spacetraders.reset_recovered")` clears the high-water
+  mark; the recovery path already clears the persisted plan — the cross-wipe
+  staleness class (v1.4.1) handled at the root.
+- **Goal ladder**: a `net_worth` verifier (credits + conservative fleet book value,
+  frame-based); `on_achieved` → `run_in_session` proposes the next rung (contracts →
+  haulers → treasury → the frontier). `charted_count`/`reputation` rungs land with
+  the v2.0 exploration tools they measure.
 - High-water/flatline history persists next to the knobs file until protoAgent
   #1632 (metric timeseries) gives it a real home.
 

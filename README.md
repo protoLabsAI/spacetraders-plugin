@@ -24,6 +24,8 @@ extension set, all auto-discovered.
 | **Knowledge** | `LESSONS.md` + `seed_kb.py` (durable lessons) + **trade-route memory** (`routes.py` — the engine learns + recalls profitable routes across windows and wipes) |
 | **Events** (ADR 0039) | the engine broadcasts `spacetraders.*` bus topics — the dashboard live-refreshes on them, the rail icon lights a dot, and any plugin can subscribe without importing this one. See [Events](#events) |
 | **Chat command** | `/spacetraders` — instant fleet status (credits · ships · engine · recent log) with **no model turn**; a user-only control command the agent can't invoke |
+| **Tripwires** (ADR 0067) | five always-on WATCHes ground-truthed against the live game — universe **reset**, treasury **drawdown**, contract **deadline**, net-worth **flatline**, trade **opportunity**. A trip wakes the agent in the Activity thread with a playbook prompt; armed at engine start, self-healing via `window_closed` |
+| **Goal ladder** | 8 goal verifiers (`credits`, `fleet_size`, `cargo_capacity`, `net_worth`, + the tripwire checks); achieving a rung enqueues a follow-up turn proposing the **next** goal |
 
 **Architecture:** the fleet runs as **two loops** — a deterministic **engine** (the muscle)
 steered by an agentic **OODA strategist** (the brain) between windows. See
