@@ -62,7 +62,9 @@ def save_state(st: dict) -> None:
     try:
         p = _state_path()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(st))
+        tmp = p.with_suffix(".json.tmp")   # atomic: a mid-write crash can't corrupt the
+        tmp.write_text(json.dumps(st))     # real file (a torn read would silently reset
+        tmp.replace(p)                     # the high-water mark / reset baseline)
     except Exception:  # noqa: BLE001 — state is advisory; never break a verifier over it
         log.debug("[spacetraders] watch state save failed", exc_info=True)
 
