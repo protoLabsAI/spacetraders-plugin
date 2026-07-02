@@ -1,6 +1,6 @@
 id: spacetraders
 name: SpaceTraders
-version: 1.7.0
+version: 1.8.0
 description: >-
   Play the live SpaceTraders v2 API (https://spacetraders.io) — a persistent,
   shared galactic economy. A FULL-BUNDLE plugin (ADR 0027): 30 fleet/market/mining/
@@ -25,8 +25,13 @@ emits:
   - trade_executed
   - ship_purchased
   - reset_recovered
-min_protoagent_version: "0.40.0"   # v1.3.0 engine consumes the graph.sdk helpers
-                                   # (supervise/Knobs/telemetry/DecisionLog) on protoAgent main
+# Own-bus subscriptions (reactive housekeeping): window_closed re-arms the tripwire
+# suite (a met watch finishes host-side); reset_recovered clears epoch-scoped state.
+subscribes:
+  - spacetraders.window_closed
+  - spacetraders.reset_recovered
+min_protoagent_version: "0.78.0"   # v1.8.0 tripwires need sdk.create_watch +
+                                   # register_watch_hook (ADR 0067, host PR #1507)
 requires_pip: []                   # pure Python over httpx (a core dependency)
 enabled: true
 requires_env: []

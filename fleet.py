@@ -1064,6 +1064,8 @@ def start_ops(minutes: float) -> str:
         return "Fleet ops already running — check status before starting another."
     E.emit("engine_started", {"window_minutes": minutes})
     E.navigate("fleet")   # flip the console to the Fleet dashboard (ADR 0044)
+    from . import watches
+    watches.arm_all()     # tripwires up whenever the engine is (idempotent replace)
     return (f"Fleet ops started in the background (~{minutes:g} min windows, watchdog keeping it "
             f"alive). The whole fleet works under one rate budget. Check st_autopilot_status.")
 
