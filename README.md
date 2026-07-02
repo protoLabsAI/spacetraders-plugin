@@ -22,6 +22,8 @@ extension set, all auto-discovered.
 | **Skills** | `manage-the-fleet` (the OODA strategist loop), `maximize-credits-per-hour`, `play-spacetraders`, `run-a-procurement-contract` (`skills/`) |
 | **Console view** (ADR 0026) | a **Fleet** rail dashboard — credits, ships + live ETAs, contracts, autopilot, the active **strategy**, the **strategist decision log**, the **galaxy leaderboard standing**, the **wipe countdown**, and the agent's **learned routes** |
 | **Knowledge** | `LESSONS.md` + `seed_kb.py` (durable lessons) + **trade-route memory** (`routes.py` — the engine learns + recalls profitable routes across windows and wipes) |
+| **Events** (ADR 0039) | the engine broadcasts `spacetraders.*` bus topics — the dashboard live-refreshes on them, the rail icon lights a dot, and any plugin can subscribe without importing this one. See [Events](#events) |
+| **Chat command** | `/spacetraders` — instant fleet status (credits · ships · engine · recent log) with **no model turn**; a user-only control command the agent can't invoke |
 
 **Architecture:** the fleet runs as **two loops** — a deterministic **engine** (the muscle)
 steered by an agentic **OODA strategist** (the brain) between windows. See
@@ -96,6 +98,26 @@ the price, capped by `tradeVolume`, so a 50% spread dies in two trades while a 1
 export→import route refills forever. So `best_route` ranks by **margin × tradeVolume**
 (per-cycle throughput), not raw spread: a 10% route moving 60 units beats a 50% one capped
 at 5. Cross-market `EXCHANGE` spreads are only a fallback when no export→import pair exists.
+
+## Events
+
+The engine publishes to the protoAgent event bus (ADR 0039) under the `spacetraders.`
+namespace — fire-and-forget, never control flow. The Fleet dashboard subscribes over the
+iframe event bridge for live refresh (with a slow poll fallback), the console rail dot
+lights for free when the view is hidden, and other plugins (a Discord ops feed, a
+portfolio watcher) can subscribe `spacetraders.#` without importing this plugin.
+
+Payload contracts (until manifest-typed event schemas land — protoAgent
+[#1636](https://github.com/protoLabsAI/protoAgent/issues/1636)):
+
+| Topic | Payload | Fired |
+|---|---|---|
+| `spacetraders.engine_started` | `{window_minutes}` | autopilot begins |
+| `spacetraders.engine_stopped` | `{reason}` | operator/agent stop, or the goal hook winds it down |
+| `spacetraders.window_closed` | `{minutes, credits_start, credits_end, gained, per_hour, ships}` | every engine window (ship *count*, not detail — bus payloads stay light) |
+| `spacetraders.trade_executed` | `{ship, good, buy_at, sell_at, units}` | a buy→haul→sell round trip completes |
+| `spacetraders.ship_purchased` | `{ship, type, yard}` | reinvestment buys a hull |
+| `spacetraders.reset_recovered` | `{status}` | the watchdog re-registered after a universe wipe |
 
 ## Intentionally NOT min-maxed — room to make it yours
 

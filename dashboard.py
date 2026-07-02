@@ -456,11 +456,30 @@ function render(d){
     <div class="log">${ap.log.map(l=>l.replace(/</g,'&lt;')).join("\n")}</div></div>`:''}
   `;
 }
+// LIVE refresh (ADR 0039): subscribe to this plugin's bus topics over the host's
+// iframe event bridge — any spacetraders.* event (trade, window close, engine
+// start/stop, reset recovery) debounce-refreshes /state, so the dashboard moves
+// when the fleet does. The poll stays as a SLOW fallback (60s) for hosts without
+// the bridge (standalone page / older host) and for drift between events.
+let refreshTimer = null;
+function scheduleRefresh(){          // debounce: a burst of trades = one refresh
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(()=>{ refreshTimer = null; poll(); }, 1200);
+}
+window.addEventListener("message", (e)=>{
+  const m = e.data || {};
+  if (m.type === "protoagent:event" && String(m.topic||"").startsWith("spacetraders.")) scheduleRefresh();
+});
 // Boot ONCE, on whichever fires first: the handshake (normal — the bearer arrives
 // with protoagent:init, so the gated /state poll authenticates), or a short timer
 // for the no-handshake case (standalone page / older host).
 let booted = false;
-function boot(){ if (booted) return; booted = true; poll(); setInterval(poll, 8000); }
+function boot(){
+  if (booted) return; booted = true;
+  try { window.parent.postMessage({type:"protoagent:subscribe", patterns:["spacetraders.#"]}, "*"); }
+  catch(e) {}
+  poll(); setInterval(poll, 60000);
+}
 kit.initPluginView(boot);
 setTimeout(boot, 800);
 // Tick the countdowns every second between polls, and re-render the map so in-transit

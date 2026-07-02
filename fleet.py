@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 
 from . import client as C
+from . import events as E
 from . import roles as R
 from . import tools as T
 # Control surface (knobs + presets + per-ship pins + decision log) on the shared protoAgent
@@ -371,6 +372,8 @@ async def job_trade(sym: str, good: str, buy_wp: str, sell_wp: str, *,
         return f"bought {held}×{good} but couldn't reach sell waypoint {sell_wp} (too far) — holding"
     await C.call("POST", f"/my/ships/{sym}/dock")
     sold = await _sell(sym, good, held, log=log)
+    E.emit("trade_executed", {"ship": sym, "good": good, "buy_at": buy_wp,
+                              "sell_at": sell_wp, "units": sold})
     return f"{_TRADE_OK} {sold}×{good} (of {held} hauled)"
 
 
@@ -707,6 +710,7 @@ async def _buy_ship_at_yard(ships: list, system: str, ship_type: str, *, log=Non
         r = await C.call("POST", "/my/ships", json={"shipType": ship_type, "waypointSymbol": yard})
         if log:
             log(f"reinvest: bought {r['ship']['symbol']} ({ship_type}) @ {yard}")
+        E.emit("ship_purchased", {"ship": r["ship"]["symbol"], "type": ship_type, "yard": yard})
         return True
     except C.SpaceTradersError as e:
         if log:
@@ -961,6 +965,11 @@ async def autopilot(minutes: float, *, log=None) -> dict:
     end_credits = await _credits()
     gained = end_credits - start_credits
     rate = round(gained / (minutes / 60.0)) if minutes else 0
+    # Window summary on the bus — ship COUNT only (per-ship detail stays in the return;
+    # bus payloads are for dashboards/feeds, keep them light).
+    E.emit("window_closed", {"minutes": minutes, "credits_start": start_credits,
+                             "credits_end": end_credits, "gained": gained,
+                             "per_hour": rate, "ships": len(results)})
     return {
         "minutes": minutes,
         "credits_start": start_credits,
@@ -1023,7 +1032,10 @@ async def _recover(result) -> bool:
         except Exception as e:  # noqa: BLE001
             status = f"reset recovery errored: {e}"
         _record(f"universe reset — {status}")
-        return status.startswith("re-registered")
+        recovered = status.startswith("re-registered")
+        if recovered:
+            E.emit("reset_recovered", {"status": status})
+        return recovered
     return True
 
 
@@ -1042,6 +1054,7 @@ def request_stop() -> None:
     """Wind the engine down gracefully after the current window (no re-kick) — called by the
     plugin's goal on_achieved hook when the operator's target is reached."""
     _engine().request_stop()
+    E.emit("engine_stopped", {"reason": "goal achieved — winding down after this window"})
 
 
 def start_ops(minutes: float) -> str:
@@ -1049,6 +1062,8 @@ def start_ops(minutes: float) -> str:
     _LOG.clear()
     if "already running" in _engine().start():
         return "Fleet ops already running — check status before starting another."
+    E.emit("engine_started", {"window_minutes": minutes})
+    E.navigate("fleet")   # flip the console to the Fleet dashboard (ADR 0044)
     return (f"Fleet ops started in the background (~{minutes:g} min windows, watchdog keeping it "
             f"alive). The whole fleet works under one rate budget. Check st_autopilot_status.")
 
@@ -1057,6 +1072,7 @@ def stop_ops() -> str:
     if _ENGINE is None or not _engine().running():
         return "No fleet ops running."
     _engine().stop()
+    E.emit("engine_stopped", {"reason": "stopped by operator/agent"})
     return "Stopping fleet ops."
 
 

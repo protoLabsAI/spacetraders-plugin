@@ -1,6 +1,6 @@
 id: spacetraders
 name: SpaceTraders
-version: 1.6.0
+version: 1.7.0
 description: >-
   Play the live SpaceTraders v2 API (https://spacetraders.io) — a persistent,
   shared galactic economy. A FULL-BUNDLE plugin (ADR 0027): 30 fleet/market/mining/
@@ -11,6 +11,20 @@ description: >-
 # Provenance (ADR 0027) — shown in the install review when added by git URL.
 repository: "https://github.com/protoLabsAI/spacetraders-plugin"
 homepage: "https://spacetraders.io"
+guide_url: "https://github.com/protoLabsAI/spacetraders-plugin#set-up"   # Settings "Setup guide" link (ADR 0059)
+# The console renders a "Test connection" button (ADR 0029) — POST /api/config/test-spacetraders
+# validates the token against GET /my/agent and reports the call sign + credits.
+test: true
+# Event topics the fleet engine broadcasts (ADR 0039) — auto-namespaced spacetraders.*;
+# the Fleet dashboard live-refreshes on them and the rail icon gets a notification dot
+# for free. Payload shapes: see README §Events (typed contracts: protoAgent #1636).
+emits:
+  - engine_started
+  - engine_stopped
+  - window_closed
+  - trade_executed
+  - ship_purchased
+  - reset_recovered
 min_protoagent_version: "0.40.0"   # v1.3.0 engine consumes the graph.sdk helpers
                                    # (supervise/Knobs/telemetry/DecisionLog) on protoAgent main
 requires_pip: []                   # pure Python over httpx (a core dependency)

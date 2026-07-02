@@ -17,9 +17,14 @@ log = logging.getLogger("protoagent.plugins.spacetraders")
 
 
 def register(registry) -> None:
+    from . import events
     from .client import set_config_token
     from .subagents import space_subagents
     from .tools import get_spacetraders_tools
+
+    # Bind the bus handle FIRST — the engine emits through events.py long after
+    # register() returns (ADR 0039); re-binding on hot-reload is idempotent.
+    events.bind(registry)
 
     # Seed the token(s) the user set in the console (System → Settings →
     # SpaceTraders), so the tools authenticate without a hand-edited file.
@@ -129,3 +134,51 @@ def register(registry) -> None:
 
     registry.register_surface(_fleet_surface_start, stop=_fleet_surface_stop,
                               name="spacetraders-fleet")
+
+    # /spacetraders chat command (ADR 0018) — a user-only control command: instant
+    # fleet status straight off the live API, no model turn, no tokens spent. The
+    # agent can't invoke it; that's the seam's design (control plane ≠ tool plane).
+    if hasattr(registry, "register_chat_command"):
+        async def _status_command(rest: str, session_id: str) -> str | None:
+            from . import fleet
+            from .client import call
+            try:
+                agent = await call("GET", "/my/agent")
+            except Exception as e:  # noqa: BLE001 — a readable reply beats a stack trace
+                return f"**SpaceTraders**: not reachable — {e}"
+            try:
+                ships = await call("GET", "/my/ships", params={"limit": 20})
+            except Exception:  # noqa: BLE001
+                ships = []
+            ops = fleet.ops_status()
+            running = "running" if ops.get("running") else "stopped"
+            lines = [
+                f"**{agent.get('symbol', '?')}** — {agent.get('credits', 0):,} credits",
+                f"fleet: {len(ships)} ship(s) · engine: {running}",
+            ]
+            tail = (ops.get("recent_log") or [])[-3:]
+            if tail:
+                lines.append("recent: " + " · ".join(tail))
+            return "\n".join(lines)
+
+        registry.register_chat_command("spacetraders", _status_command)
+        log.info("[spacetraders] registered /spacetraders chat command")
+
+    # Token test route (ADR 0029 convention) — the manifest's `test: true` renders a
+    # console Test button that POSTs here; validate the token against the live API.
+    from fastapi import APIRouter
+
+    test_router = APIRouter()
+
+    @test_router.post("/api/config/test-spacetraders")
+    async def _test(body: dict | None = None):
+        from .client import call
+        try:
+            agent = await call("GET", "/my/agent")
+            return {"ok": True,
+                    "identity": f"{agent.get('symbol', '?')} ({agent.get('credits', 0):,} cr)",
+                    "error": ""}
+        except Exception as e:  # noqa: BLE001 — the button needs a message, not a 500
+            return {"ok": False, "identity": "", "error": str(e)}
+
+    registry.register_router(test_router, prefix="")
