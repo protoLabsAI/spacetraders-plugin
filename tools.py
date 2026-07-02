@@ -1159,6 +1159,211 @@ async def _load_spec() -> dict:
     return _DOCS_SPEC
 
 
+# ── exploration & the frontier (v2.0, docs/sdk-round2.md) ───────────────────────────
+
+@tool
+async def st_chart(ship: str) -> str:
+    """Chart the ship's current waypoint — reveal its hidden traits to the whole galaxy
+    (an uncharted waypoint shows only UNCHARTED until someone does this). Charting is how
+    the fleet discovers markets/shipyards the price map can't see, and it counts toward a
+    `spacetraders:charted_count` goal.
+
+    Args:
+        ship: ship symbol (must be AT the waypoint to chart).
+    """
+    try:
+        d = await call("POST", f"/my/ships/{ship}/chart")
+    except SpaceTradersError as e:
+        return f"Error: {e}"   # 'already charted' comes back here — someone beat you to it
+    wp = d.get("waypoint") or {}
+    traits = ", ".join(t.get("symbol", "?") for t in wp.get("traits", [])) or "no traits"
+    return f"charted {wp.get('symbol', '?')} [{wp.get('type', '?')}] — {traits}"
+
+
+@tool
+async def st_scan_waypoints(ship: str) -> str:
+    """Scan nearby waypoints with the ship's sensors (reactor cooldown applies) — a
+    cheap way to sight traits without flying there. Use st_chart at a waypoint to make
+    a discovery permanent for everyone.
+
+    Args:
+        ship: ship symbol.
+    """
+    try:
+        d = await call("POST", f"/my/ships/{ship}/scan/waypoints")
+    except SpaceTradersError as e:
+        return f"Error: {e}"
+    rows = [f"  {w.get('symbol', '?')} [{w.get('type', '?')}] — "
+            + (", ".join(t.get("symbol", "?") for t in w.get("traits", [])) or "?")
+            for w in d.get("waypoints", [])[:15]]
+    cd = (d.get("cooldown") or {}).get("remainingSeconds", 0)
+    return (f"scanned {len(d.get('waypoints', []))} waypoint(s) (cooldown {cd}s):\n"
+            + "\n".join(rows)) if rows else f"scan returned nothing (cooldown {cd}s)"
+
+
+@tool
+async def st_scan_systems(ship: str) -> str:
+    """Scan for nearby star systems (reactor cooldown applies) — the first step of an
+    interstellar hop: find a neighbor, then st_jump (via a jump gate) or st_warp to it.
+
+    Args:
+        ship: ship symbol.
+    """
+    try:
+        d = await call("POST", f"/my/ships/{ship}/scan/systems")
+    except SpaceTradersError as e:
+        return f"Error: {e}"
+    rows = [f"  {s.get('symbol', '?')} [{s.get('type', '?')}] at ({s.get('x')},{s.get('y')}) "
+            f"— distance {s.get('distance', '?')}" for s in d.get("systems", [])[:15]]
+    cd = (d.get("cooldown") or {}).get("remainingSeconds", 0)
+    return (f"scanned {len(d.get('systems', []))} system(s) (cooldown {cd}s):\n"
+            + "\n".join(rows)) if rows else f"scan returned nothing (cooldown {cd}s)"
+
+
+@tool
+async def st_jump(ship: str, waypoint: str) -> str:
+    """Jump instantaneously to a CONNECTED waypoint through a jump gate (the ship must
+    be at a gate; check connections with st_waypoints trait=JUMP_GATE). Buys antimatter
+    from the gate market and starts a reactor cooldown. Auto-orbits first.
+
+    Args:
+        ship: ship symbol.
+        waypoint: the connected destination waypoint symbol.
+    """
+    try:
+        await call("POST", f"/my/ships/{ship}/orbit")
+        d = await call("POST", f"/my/ships/{ship}/jump", json={"waypointSymbol": waypoint})
+    except SpaceTradersError as e:
+        return f"Error: {e}"
+    nav = d.get("nav") or {}
+    cd = (d.get("cooldown") or {}).get("remainingSeconds", 0)
+    cost = (d.get("transaction") or {}).get("totalPrice", 0)
+    return (f"{ship} jumped to {nav.get('waypointSymbol', waypoint)} "
+            f"(antimatter {cost:,} cr, cooldown {cd}s)")
+
+
+@tool
+async def st_warp(ship: str, waypoint: str) -> str:
+    """Warp to a waypoint in ANOTHER system (needs a WARP_DRIVE module — most starter
+    hulls don't have one; st_jump via a gate is the usual interstellar path). Burns fuel;
+    auto-orbits first.
+
+    Args:
+        ship: ship symbol.
+        waypoint: the destination waypoint symbol (in another system).
+    """
+    try:
+        await call("POST", f"/my/ships/{ship}/orbit")
+        d = await call("POST", f"/my/ships/{ship}/warp", json={"waypointSymbol": waypoint})
+    except SpaceTradersError as e:
+        return f"Error: {e}"   # 'no warp drive' lands here with the API's message
+    nav = d.get("nav") or {}
+    fuel = d.get("fuel") or {}
+    arrive = ((nav.get("route") or {}).get("arrival") or "?")
+    return (f"{ship} warping to {waypoint} — arrives {arrive}, "
+            f"fuel {fuel.get('current', '?')}/{fuel.get('capacity', '?')}")
+
+
+@tool
+async def st_construction(waypoint: str) -> str:
+    """Check a construction site (e.g. the system's jump gate — the community build
+    goal): what materials it still needs and whether it's complete. Feed it with
+    st_supply_construction; the missing goods are ordinary trade goods the engine
+    already knows how to source.
+
+    Args:
+        waypoint: the construction-site waypoint symbol (type JUMP_GATE, usually).
+    """
+    system = _system_of(waypoint)
+    try:
+        d = await call("GET", f"/systems/{system}/waypoints/{waypoint}/construction")
+    except SpaceTradersError as e:
+        return f"Error: {e}"
+    site = d if isinstance(d, dict) else {}
+    if site.get("isComplete"):
+        return f"{waypoint}: construction COMPLETE"
+    from .exploration import construction_gaps
+    gaps = construction_gaps(site)
+    if not gaps:
+        return f"{waypoint}: no construction site (or nothing missing)"
+    rows = [f"  {g['good']}: {g['fulfilled']:,}/{g['required']:,} (missing {g['missing']:,})"
+            for g in gaps]
+    return f"{waypoint} construction needs:\n" + "\n".join(rows)
+
+
+@tool
+async def st_supply_construction(ship: str, waypoint: str, good: str, units: int) -> str:
+    """Deliver cargo to a construction site (the ship must be docked there with the
+    goods aboard). Contributing to the jump gate is a long-horizon, community objective —
+    a natural top rung for the goal ladder.
+
+    Args:
+        ship: ship symbol (docked at the site, cargo aboard).
+        waypoint: the construction-site waypoint.
+        good: the trade good to deliver (see st_construction for what's missing).
+        units: how many to deliver.
+    """
+    system = _system_of(waypoint)
+    try:
+        await call("POST", f"/my/ships/{ship}/dock")
+        d = await call("POST", f"/systems/{system}/waypoints/{waypoint}/construction/supply",
+                       json={"shipSymbol": ship, "tradeSymbol": good, "units": int(units)})
+    except SpaceTradersError as e:
+        return f"Error: {e}"
+    from .exploration import construction_gaps
+    gaps = construction_gaps(d.get("construction") or {})
+    left = "; still missing " + ", ".join(f"{g['missing']:,}×{g['good']}" for g in gaps) if gaps \
+        else "; site COMPLETE"
+    return f"delivered {units:,}×{good} to {waypoint}{left}"
+
+
+@tool
+async def st_explore(system: str = "", probe: str = "") -> str:
+    """Launch a background EXPLORATION CAMPAIGN: a detached explorer charts every
+    uncharted waypoint in the system (nearest-first sweep) and reports back to the
+    Activity thread when done — this turn doesn't wait. Prefer a probe the autopilot
+    isn't using (the engine and the campaign share the API rate budget).
+
+    Args:
+        system: system to chart (default: the picked ship's current system).
+        probe: ship to send (default: the first zero-cargo probe, else any ship).
+    """
+    try:
+        ships = await call("GET", "/my/ships", params={"limit": 20})
+    except SpaceTradersError as e:
+        return f"Error: {e}"
+    if not ships:
+        return "No ships — register an agent first (st_register)."
+    pick = next((s for s in ships if s["symbol"] == probe), None) if probe else None
+    if probe and pick is None:
+        return f"No ship named {probe} in the fleet."
+    pick = pick or next((s for s in ships if (s.get("cargo") or {}).get("capacity", 0) == 0),
+                        ships[0])
+    sym = pick["symbol"]
+    system = (system or pick["nav"]["systemSymbol"]).upper()
+    wps: list = []
+    try:
+        page = 1
+        while page <= 12:
+            batch = await call("GET", f"/systems/{system}/waypoints",
+                               params={"limit": 20, "page": page})
+            if not batch:
+                break
+            wps.extend(batch)
+            if len(batch) < 20:
+                break
+            page += 1
+    except SpaceTradersError as e:
+        return f"Error: {e}"
+    from .exploration import sweep_order, uncharted
+    targets = uncharted(wps)
+    here = next((w for w in wps if w["symbol"] == pick["nav"].get("waypointSymbol")),
+                {"x": 0, "y": 0})
+    from .campaigns import launch
+    res = await launch(system, sym, sweep_order(here, targets))
+    return res["message"]
+
+
 @tool
 async def st_docs(query: str) -> str:
     """Look up the OFFICIAL SpaceTraders reference (the OpenAPI spec) for a topic — API
@@ -1249,5 +1454,7 @@ def get_spacetraders_tools() -> list:
         st_survey, st_extract, st_siphon, st_jettison, st_purchase, st_sell,
         st_contracts, st_accept_contract, st_negotiate_contract,
         st_deliver, st_fulfill_contract,
+        st_chart, st_scan_waypoints, st_scan_systems, st_jump, st_warp,
+        st_construction, st_supply_construction, st_explore,
         st_docs,
     ])

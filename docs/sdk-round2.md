@@ -150,13 +150,24 @@ goal verifiers):
 - `save_token` → `host.apply_settings` (stop hand-writing `secrets.yaml`);
   `sdk.config()` replaces direct `graph.config` imports.
 
-### v2.0 — the frontier (gated on ADR 0070 / protoAgent #1635)
+### v2.0 — the frontier (SHIPPED; ADR 0070 merged host-side #1604/#1605)
 
-- Exploration campaigns as detached background workers: chart, scan, warp/jump into
-  new systems; reports land as ADR 0070 report cards with a push-resume nudge.
-- New tools: `st_chart`, `st_scan`, `st_warp`/`st_jump`, `st_construction` +
-  `st_construction_supply` (the jump-gate community goal — a literal shared,
-  long-horizon objective).
+- **`st_explore`**: launches a detached background charting campaign — picks an idle
+  probe, builds a nearest-first sweep over the system's uncharted waypoints
+  (`exploration.py`, pure + host-free tested), and spawns a disposable `explorer`
+  subagent via the host BackgroundManager (`campaigns.py`). The report rides the
+  ADR 0070 pipeline for free — push-resume nudge, KB-indexed report, console report
+  card — landing in the durable Activity thread (same home as the tripwire turns).
+  Direct `STATE.background_mgr` access is the documented stopgap until protoAgent
+  #1635 (`sdk.spawn_background`) lands.
+- New tools: `st_chart`, `st_scan_waypoints`/`st_scan_systems`, `st_jump`/`st_warp`,
+  `st_construction` + `st_supply_construction` (the jump-gate community goal — a
+  literal shared, long-horizon objective the trade engine can source like any goods
+  run) — plus the `explorer` crew subagent (bounded-worklist discipline).
+- **`charted_count` verifier** (9 total): counts waypoints whose `chart.submittedBy`
+  is OUR call sign — contributions, not visits. A `reputation` rung is confirmed
+  IMPOSSIBLE today: the v2 API exposes no `/my/factions` reputation surface (checked
+  against the OpenAPI spec), so that matrix row is an API-level ⛔, not a deferral.
 
 ### v2.1 — the Syndicate
 

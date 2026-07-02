@@ -205,8 +205,46 @@ def register(registry) -> None:
             return VerifyResult(best >= want, f"best fresh margin {best}% vs {want}%", f"{best}%")
 
         registry.register_goal_verifier("spacetraders:opportunity", _verify_opportunity)
+
+        async def _verify_charted_count(spec, ctx):
+            # Met = we CHARTED at least args.min waypoints in the fleet's home system
+            # (chart.submittedBy == our call sign — contributions, not visits). The
+            # exploration goal-ladder rung; a reputation rung is impossible today
+            # (the v2 API exposes no /my/factions reputation surface).
+            from graph.goals.types import VerifyResult
+
+            from .client import call
+            from .exploration import charted_by
+            try:
+                agent = await call("GET", "/my/agent")
+                ships = await call("GET", "/my/ships", params={"limit": 1})
+            except Exception as e:  # noqa: BLE001
+                return VerifyResult(False, f"could not read agent/fleet: {e}", "")
+            if not ships:
+                return VerifyResult(False, "no ships — no system to count charts in", "")
+            system = ships[0]["nav"]["systemSymbol"]
+            wps, page = [], 1
+            try:
+                while page <= 12:   # cap ~240 waypoints (st_waypoints' idiom) — a bigger
+                    # system would undercount, which for a >=min goal only DELAYS
+                    # achievement (never falsely meets); no real system is near the cap
+                    batch = await call("GET", f"/systems/{system}/waypoints",
+                                       params={"limit": 20, "page": page})
+                    if not batch:
+                        break
+                    wps.extend(batch)
+                    if len(batch) < 20:
+                        break
+                    page += 1
+            except Exception as e:  # noqa: BLE001
+                return VerifyResult(False, f"could not read waypoints: {e}", "")
+            have = charted_by(wps, agent.get("symbol", ""))
+            want = int((spec.get("args") or {}).get("min", 0))
+            return VerifyResult(have >= want, f"charted {have} / {want} in {system}", str(have))
+
+        registry.register_goal_verifier("spacetraders:charted_count", _verify_charted_count)
         log.info("[spacetraders] registered tripwire verifiers: net_worth, drawdown, "
-                 "reset_detected, contract_deadline, opportunity")
+                 "reset_detected, contract_deadline, opportunity, charted_count")
 
     # Goal hook (ADR 0028, PR3) — when the operator's substrate goal is achieved, wind
     # down the self-perpetuating engine. This is why WHEN to stop isn't hardcoded in the
