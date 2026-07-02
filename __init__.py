@@ -225,7 +225,9 @@ def register(registry) -> None:
             system = ships[0]["nav"]["systemSymbol"]
             wps, page = [], 1
             try:
-                while page <= 12:
+                while page <= 12:   # cap ~240 waypoints (st_waypoints' idiom) — a bigger
+                    # system would undercount, which for a >=min goal only DELAYS
+                    # achievement (never falsely meets); no real system is near the cap
                     batch = await call("GET", f"/systems/{system}/waypoints",
                                        params={"limit": 20, "page": page})
                     if not batch:
