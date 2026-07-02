@@ -26,6 +26,7 @@ extension set, all auto-discovered.
 | **Chat command** | `/spacetraders` — instant fleet status (credits · ships · engine · recent log) with **no model turn**; a user-only control command the agent can't invoke |
 | **Tripwires** (ADR 0067) | five always-on WATCHes ground-truthed against the live game — universe **reset**, treasury **drawdown**, contract **deadline**, net-worth **flatline**, trade **opportunity**. A trip wakes the agent in the Activity thread with a playbook prompt; armed at engine start, self-healing via `window_closed` |
 | **Goal ladder** | 9 goal verifiers (`credits`, `fleet_size`, `cargo_capacity`, `net_worth`, `charted_count`, + the tripwire checks); achieving a rung enqueues a follow-up turn proposing the **next** goal |
+| **A2A card skills** | typed `fleet_report` / `quote_route` (`output_schema` + `result_mime`, finalizer-enforced) — another agent's `delegate_to` gets parseable JSON, not prose. The [Syndicate](docs/syndicate.md) multi-agent runbook builds on them |
 | **Exploration** (ADR 0070) | `st_explore` launches a **detached background campaign**: an `explorer` subagent charts the system's uncharted waypoints (nearest-first sweep) and reports back through the host's background-results pipeline — report card, KB index, Activity-thread nudge. Plus `st_chart`/`st_scan_*`/`st_jump`/`st_warp` and **construction supply** (`st_construction`/`st_supply_construction` — the jump-gate community goal) |
 
 **Architecture:** the fleet runs as **two loops** — a deterministic **engine** (the muscle)
